@@ -116,3 +116,17 @@ A migration é incremental, não altera migrations anteriores e não cria gerado
 - Índices cobrem os históricos por documento, cliente e oportunidade.
 
 Somente envios aceitos pelo SMTP são persistidos. Falhas de configuração ou transporte não são registradas como sucesso e não alteram o documento.
+
+## Migration 009_contracts_payments.sql
+
+- `contract_statuses` e `payment_methods`: catálogos extensíveis de estados e formas de pagamento.
+- `contract_sequences`: contador anual por organização, atualizado atomicamente na transação que cria o contrato.
+- `contracts`: cliente, oportunidade opcional, responsável, número, condições, datas, valores derivados, plano financeiro, status e versão.
+- `contract_items`: itens manuais, serviços ou vínculos opcionais a equipamento/kit, com bruto, desconto e total persistidos.
+- `contract_installments`: entrada/parcela, vencimento, valor, recebido, saldo, estado e versão.
+- `contract_payments`: baixas múltiplas por parcela, forma, data, referência, observação e versão.
+- `contract_history`: snapshots e eventos do ciclo comercial, financeiro e documental.
+- `crm_documents`: recebe `contract_id`, `document_type`, situação/dados da assinatura externa e permite oportunidade nula quando existe contrato.
+- `crm_document_emails`: passa a aceitar oportunidade nula para documentos ligados diretamente a contrato.
+
+Checks conciliam bruto, descontos, líquido, entrada e saldo; impedem pagamento negativo ou parcela inconsistente. FKs compostas isolam organizações. A migration adiciona permissões `contracts.*` e não altera o conteúdo binário dos PDFs.

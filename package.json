@@ -19,7 +19,9 @@
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "db:local": "tsx scripts/local-db.ts",
     "local:prepare": "tsx scripts/prepare-local.ts",
-    "db:seed:demo": "tsx scripts/seed-demo.ts"
+    "db:seed:demo": "tsx scripts/seed-demo.ts",
+    "storage:setup": "tsx scripts/setup-document-storage.ts",
+    "storage:migrate": "tsx scripts/migrate-document-storage.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "5.9.1",
@@ -46,5 +48,10 @@
     "tailwindcss": "4.3.3",
     "tsx": "4.23.13",
     "typescript": "5.9.3"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "@embedded-postgres/linux-x64"
+    ]
   }
 }

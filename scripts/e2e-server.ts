@@ -11,7 +11,7 @@ import { hashPassword } from '../src/modules/auth/crypto';
 const port=await new Promise<number>(done=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const a=s.address();if(a&&typeof a==='object')s.close(()=>done(a.port));});});
 await mkdir(resolve('.local/tests'),{recursive:true});
 const dir=await mkdtemp(resolve('.local/tests/e2e-'));
-process.env.DOCUMENT_STORAGE_DIR=resolve(dir,'documents');
+process.env.DOCUMENT_STORAGE_PROVIDER='local';process.env.DOCUMENT_STORAGE_DIR=resolve(dir,'documents');
 const db=new EmbeddedPostgres({databaseDir:dir,user:'e2e',password:'e2e_database_only',port,persistent:true,authMethod:'scram-sha-256',postgresFlags:['-h','127.0.0.1'],onLog:()=>{},onError:()=>{}});
 await db.initialise();await db.start();await db.createDatabase('peclat_e2e');
 process.env.DATABASE_URL=`postgresql://e2e:e2e_database_only@127.0.0.1:${port}/peclat_e2e`;
@@ -24,6 +24,8 @@ const user=(await database().query("INSERT INTO users(email,name,password_hash) 
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'seller' FROM organizations WHERE slug='peclat-solar'",[user.id]);
 const documentUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('documents@e2e.local','Consultor de documentos',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'seller' FROM organizations WHERE slug='peclat-solar'",[documentUser.id]);
+const contractUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('contracts@e2e.local','Gestor de contratos',$1) RETURNING id",[hash])).rows[0];
+await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[contractUser.id]);
 const app=spawn(process.execPath,[resolve('node_modules/next/dist/bin/next'),'start','--hostname','127.0.0.1','--port','3100'],{stdio:'inherit',env:process.env,windowsHide:true});
 let stopping=false;
 async function stop(){if(stopping)return;stopping=true;if(app.exitCode===null&&app.signalCode===null){const closed=once(app,'close');app.kill();await closed;}await new Promise<void>(done=>smtp.close(()=>done()));await database().end();await db.stop();process.exit(0);}

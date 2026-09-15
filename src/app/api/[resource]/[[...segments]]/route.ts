@@ -8,9 +8,10 @@ import { csvCell,stages,uuid,type Kind } from '@/modules/crm/domain';
 import { addContact,addNote,addTask,completeTask,crmOptions,dashboard,DuplicateError,exportRecords,getRecord,globalSearch,listRecords,mutateTag,recordAction,recordFeed,saveRecord } from '@/modules/crm/repository';
 import { createSolarSizing,getEnergyUnit,listEnergyUnits,listSolarSizings,saveBill,saveConsumption,saveEnergyUnit,setEnergyUnitStatus } from '@/modules/energy/repository';
 import { getEquipment,getKit,listEquipment,listKits,listKitSelections,saveEquipment,saveKit,selectKitForSizing,setEquipmentStatus,setKitStatus } from '@/modules/solar-catalog/repository';
-import { createDocument,getDocument,getDocumentFile,listDocuments,sendDocumentEmail,setDocumentStatus,updateDocument } from '@/modules/documents/repository';
+import { createDocument,getDocument,getDocumentFile,listDocuments,sendDocumentEmail,setDocumentSignature,setDocumentStatus,updateDocument } from '@/modules/documents/repository';
 import { MAX_PDF_BYTES } from '@/modules/documents/storage';
 import { smtpProvider } from '@/integrations/mail';
+import {contractAlerts,contractDashboard,contractOptions,getContractDetail,listContracts,registerPayment,saveContract,setContractStatus,updatePayment} from '@/modules/contracts/repository';
 type Context={params:Promise<{resource:string;segments?:string[]}>};
 const resources:Record<string,Kind>={leads:'lead',customers:'customer',companies:'company'};
 const respond=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
@@ -20,6 +21,10 @@ async function handle(request:Request,context:Context){
   if(segments.length>2)throw new AccessError(404,'Não encontrado.');
   const url=new URL(request.url);const query=Object.fromEntries(url.searchParams);const kind=resources[resource];
   if(request.method==='GET'){
+   if(resource==='contracts'){if(action)throw new AccessError(404,'Não encontrado.');return respond(id?await getContractDetail(actor,id):await listContracts(actor,query));}
+   if(resource==='contract-dashboard'&&!id)return respond(await contractDashboard(actor));
+   if(resource==='contract-alerts'&&!id)return respond(await contractAlerts(actor,query));
+   if(resource==='contract-options'&&!id)return respond(await contractOptions(actor));
    if(resource==='documents'){
     if(id&&action==='file'){const {document,bytes}=await getDocumentFile(actor,id);const fallback=document.original_filename.replace(/[^a-zA-Z0-9._-]/g,'_');return new NextResponse(new Uint8Array(bytes),{headers:{'Content-Type':'application/pdf','Content-Length':String(bytes.length),'Content-Disposition':`attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(document.original_filename)}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});}
     if(action)throw new AccessError(404,'Não encontrado.');return respond(id?await getDocument(actor,id):await listDocuments(actor,query));
@@ -59,11 +64,20 @@ async function handle(request:Request,context:Context){
    if(resource==='dashboard')return respond(await dashboard(actor));
    if(['activities','notes','contacts','tasks'].includes(resource))return respond(await recordFeed(actor,uuid.parse(query.record_id),resource as 'activities'|'notes'|'contacts'|'tasks',z.coerce.number().int().min(1).max(100000).parse(query.page??1)));
   }else{
-   if(resource==='documents'&&request.method==='POST'&&!id){const form=await readMultipartMutation(request,MAX_PDF_BYTES+131072);const file=form.get('file');if(!(file instanceof File))throw new AccessError(400,'Selecione o arquivo PDF.');const metadata=Object.fromEntries(['customer_id','opportunity_id','name','budget_value','valid_until','notes'].map(key=>[key,String(form.get(key)??'')]));return respond(await createDocument(actor,metadata,{name:file.name,type:file.type,bytes:new Uint8Array(await file.arrayBuffer())}),201);}
+   if(resource==='contracts'){
+    const body=await readMutation(request);
+    if(request.method==='POST'&&!id)return respond(await saveContract(actor,body),201);
+    if(request.method==='PUT'&&id&&!action)return respond(await saveContract(actor,body,id));
+    if(request.method==='POST'&&id&&action==='status')return respond(await setContractStatus(actor,id,body));
+    if(request.method==='POST'&&id&&action==='payments')return respond(await registerPayment(actor,id,body),201);
+   }
+   if(resource==='contract-payments'&&request.method==='PUT'&&id&&!action)return respond(await updatePayment(actor,id,await readMutation(request)));
+   if(resource==='documents'&&request.method==='POST'&&!id){const form=await readMultipartMutation(request,MAX_PDF_BYTES+131072);const file=form.get('file');if(!(file instanceof File))throw new AccessError(400,'Selecione o arquivo PDF.');const metadata=Object.fromEntries(['customer_id','opportunity_id','contract_id','document_type','name','budget_value','valid_until','notes'].map(key=>[key,String(form.get(key)??'')]));return respond(await createDocument(actor,metadata,{name:file.name,type:file.type,bytes:new Uint8Array(await file.arrayBuffer())}),201);}
    const body=await readMutation(request);
    if(resource==='documents'){
     if(request.method==='PUT'&&id&&!action)return respond(await updateDocument(actor,id,body));
     if(request.method==='POST'&&id&&action==='status'){const parsed=z.object({status:z.string(),version:z.number().int().positive()}).strict().parse(body);return respond(await setDocumentStatus(actor,id,parsed.status,parsed.version));}
+    if(request.method==='POST'&&id&&action==='signature')return respond(await setDocumentSignature(actor,id,body));
     if(request.method==='POST'&&id&&action==='email')return respond(await sendDocumentEmail(actor,id,body,smtpProvider()),201);
    }
    if(resource==='solar-equipment'){

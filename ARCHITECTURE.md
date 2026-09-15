@@ -18,7 +18,7 @@ Referências: [Next.js](https://nextjs.org/docs/app/getting-started/installation
 
 ## Evolução do domínio solar
 
-Contato/cliente será a raiz da visão 360º. Unidades consumidoras pertencerão ao cliente; contas e consumo à unidade. Oportunidades ligarão proposta versionada, contrato, pagamentos e instalação. Valores monetários usarão numeric, potência kWp e consumo kWh terão precisão explícita. Arquivos ficarão em armazenamento privado; PostgreSQL guardará metadados, tenant e permissões. Não antecipar tabelas sem casos de uso e migrations testadas.
+Contato/cliente é a raiz da visão 360º. Unidades consumidoras pertencem ao cliente; contas e consumo à unidade. Oportunidades podem ligar contratos e seus pagamentos. Valores monetários usam numeric, potência kWp e consumo kWh têm precisão explícita. Arquivos ficam em armazenamento privado; PostgreSQL guarda metadados, tenant e permissões.
 
 ### Consumo energético — FASE 4, etapa 1
 
@@ -44,9 +44,9 @@ O vínculo não altera `solar_sizings`. `solar_sizing_kit_selections` acrescenta
 
 ### Documentos e orçamentos manuais — FASE 4, etapa 4
 
-`src/modules/documents` mantém metadados, vínculos, versões e snapshots no PostgreSQL. O PDF fica em armazenamento privado fora de `public`; o caminho físico usa UUIDs de organização e documento, enquanto o nome original existe apenas como metadado. `DOCUMENT_STORAGE_DIR` aponta para um volume persistente e usa `.local/documents` no desenvolvimento.
+`src/modules/documents` mantém metadados, vínculos, versões e snapshots no PostgreSQL. O PDF fica em armazenamento privado fora de `public`; a chave usa UUIDs de organização e documento, enquanto o nome original existe apenas como metadado. `DOCUMENT_STORAGE_PROVIDER=local` usa `.local/documents` no desenvolvimento. Na hospedagem, `DOCUMENT_STORAGE_PROVIDER=supabase` usa um bucket privado do Supabase Storage pelo backend, com chave secreta sem prefixo `NEXT_PUBLIC_`.
 
-Cada documento exige simultaneamente um cliente e uma oportunidade vinculada àquele mesmo cliente. O repositório reaplica `crm.all`/`crm.own` nos dois pais, inclusive no download. Uploads aceitam somente `application/pdf`, extensão `.pdf`, cabeçalho `%PDF-` e até 10 MB. O download recalcula SHA-256 antes de responder e nunca expõe o caminho do arquivo.
+Cada documento exige um cliente e ao menos uma oportunidade ou contrato vinculado ao mesmo cliente. O repositório reaplica o acesso aos pais, inclusive no download. Uploads aceitam somente `application/pdf`, extensão `.pdf`, cabeçalho `%PDF-` e até 10 MB. O bucket repete as restrições de MIME e tamanho. O download recalcula SHA-256 antes de responder e nunca fornece URL pública ou assinada ao navegador.
 
 Edição de nome, valor, validade e observação usa versão concorrente. Mudanças de status e dados geram snapshots com autor e data. O arquivo original não é substituído: um novo PDF exige um novo documento, preservando a rastreabilidade. Não há geração automática, assinatura, contrato ou pagamento.
 
@@ -57,6 +57,16 @@ O mesmo adaptador SMTP da recuperação de senha implementa um contrato separado
 `crm_document_emails` é gravada somente após o SMTP aceitar a mensagem. Ela preserva destinatário, assunto, mensagem, nome do documento e arquivo, identificador do provedor, autor e data. A atividade pertence ao cliente e aparece também no histórico agregado da oportunidade. Um documento em rascunho passa a enviado depois da entrega; aceitos ou recusados não são rebaixados ao reenviar.
 
 SMTP ausente retorna erro 503 explícito. Falha de conexão ou entrega retorna 502 e não cria registro de envio. O fluxo não contém fila, reenvio automático, rastreamento de abertura, HTML, WhatsApp ou geração de proposta.
+
+### Contratos e financeiro — FASE 5
+
+`src/modules/contracts` concentra validação, cálculos e persistência. `contract_sequences` é atualizada por `INSERT ... ON CONFLICT DO UPDATE` dentro da mesma transação da criação, garantindo um número anual exclusivo por organização. O navegador envia itens e plano; o servidor calcula bruto, descontos, líquido, entrada e saldo em centavos.
+
+Itens podem ser manuais ou referenciar catálogo. As parcelas materializam a entrada e o saldo mensal, com ajuste de arredondamento na última. Pagamentos são eventos separados, permitindo baixas parciais e múltiplas; após cada alteração, a parcela é recalculada dentro de bloqueio transacional. Contratos com pagamentos não aceitam reconstrução do plano financeiro. Conclusão exige quitação e cancelamento exige permissão própria.
+
+`contracts.all` e `contracts.own` controlam leitura por organização e responsável. Criação, edição, cancelamento, leitura financeira e gestão de pagamentos possuem permissões separadas. Todas as mutações relevantes geram `contract_history` e `crm_activities`; `version` protege contratos, parcelas, pagamentos e documentos contra edição concorrente.
+
+Documentos recebem classificação e vínculo opcional ao contrato. A assinatura armazenada é somente um registro de um ato externo, com signatário, data, observação e autor do lançamento. Não existe motor de assinatura eletrônica, gateway, cobrança automática, nota fiscal, contabilidade ou proposta gerada pelo sistema.
 
 ## Validação
 

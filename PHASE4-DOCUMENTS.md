@@ -12,7 +12,7 @@ Esta etapa adiciona PDFs preparados manualmente às oportunidades e aos clientes
 - Download autenticado com nome original e verificação SHA-256.
 - Edição de metadados com controle de versão concorrente.
 - Histórico de criação, edição e status com snapshots, autor e data.
-- Armazenamento configurável por `DOCUMENT_STORAGE_DIR`, fora da pasta pública.
+- Armazenamento local configurável para desenvolvimento e bucket privado no Supabase Storage para hospedagem.
 - Interface responsiva validada em 390 × 844 px.
 
 ## Arquivos criados
@@ -20,9 +20,13 @@ Esta etapa adiciona PDFs preparados manualmente às oportunidades e aos clientes
 - `db/migrations/007_manual_documents.sql`
 - `src/modules/documents/domain.ts`
 - `src/modules/documents/storage.ts`
+- `src/modules/documents/supabase-storage.ts`
 - `src/modules/documents/repository.ts`
 - `src/components/documents/document-workspace.tsx`
 - `tests/e2e/documents.spec.ts`
+- `tests/storage.test.ts`
+- `scripts/setup-document-storage.ts`
+- `scripts/migrate-document-storage.ts`
 - `PHASE4-DOCUMENTS.md`
 
 ## Arquivos alterados
@@ -55,7 +59,11 @@ Esta etapa adiciona PDFs preparados manualmente às oportunidades e aos clientes
 
 ## Operação
 
-O diretório configurado em `DOCUMENT_STORAGE_DIR` precisa ser persistente e incluído no backup junto com o PostgreSQL. Restaurar somente um dos dois deixa metadados ou arquivos incompletos. O padrão local é `.local/documents`.
+No desenvolvimento, `DOCUMENT_STORAGE_PROVIDER=local` mantém os PDFs em `DOCUMENT_STORAGE_DIR`, cujo padrão é `.local/documents`. Na hospedagem, use `DOCUMENT_STORAGE_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_STORAGE_BUCKET` e `SUPABASE_SECRET_KEY` (preferida) ou `SUPABASE_SERVICE_ROLE_KEY` (legada). Configure somente uma chave; ela existe apenas no backend e não pode receber prefixo `NEXT_PUBLIC_`.
+
+`pnpm storage:setup` cria ou reforça o bucket como privado, limitado a 10 MB e `application/pdf`. `pnpm storage:migrate` copia os arquivos mencionados por `crm_documents` do diretório local para o bucket, valida SHA-256 nos dois lados, ignora cópias já válidas e não apaga os originais. Configure o provedor como `supabase` somente depois que a migração terminar sem arquivos ausentes.
+
+O navegador continua usando `/api/documents/:id/file`. Essa rota exige a sessão própria do CRM, valida organização, responsável, cliente e oportunidade antes de o backend acessar o Storage. Não são geradas URLs públicas ou assinadas. Como o backend usa uma chave secreta, não são necessárias políticas de acesso direto para `anon` ou `authenticated` no bucket.
 
 O PDF original não é substituído. Uma nova versão do arquivo deve ser anexada como outro documento; alterações de nome, valor, validade, observação e status ficam no histórico do documento existente.
 

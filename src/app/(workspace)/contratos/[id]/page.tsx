@@ -1,0 +1,2 @@
+import {ContractDetail} from '@/components/contracts/contract-detail';import {getContractDetail} from '@/modules/contracts/repository';import {pageActor} from '@/server/session';
+export default async function Page({params}:{params:Promise<{id:string}>}){const actor=await pageActor(),{id}=await params,detail=await getContractDetail(actor,id);return <ContractDetail initial={detail} canEdit={actor.permissions.includes('contracts.edit')} canCancel={actor.permissions.includes('contracts.cancel')} canManagePayments={actor.permissions.includes('contracts.payments.manage')}/>;}

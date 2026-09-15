@@ -108,16 +108,22 @@ Notas, histórico e tarefas usam as tabelas existentes. Agenda funciona por dia/
 
 O seed opt-in mantém os quatro cadastros anteriores e acrescenta duas oportunidades e duas tarefas DEMO. No pipeline, tarefas, agenda, follow-up e métricas comerciais, escolha Demonstração DEMO no filtro Base de dados para inspecionar os exemplos. O padrão é Operação real. Os indicadores de cadastros existentes também excluem DEMO, mantendo as mesmas métricas. A busca global pode encontrar exemplos identificados pelo nome. Não é possível misturar cadastros DEMO e reais numa oportunidade; a conversão para cliente conserva essa classificação.
 
-Detalhes técnicos da operação comercial: PHASE3.md. A FASE 4 está implementada até equipamentos, kits e vínculo ao dimensionamento; integrações externas e FASE 5 não foram iniciadas.
+Detalhes técnicos da operação comercial: PHASE3.md. A FASE 4 cobre energia, catálogo e PDFs privados; a FASE 5 cobre contratos, vendas, parcelas, pagamentos e documentos comerciais. Consulte PHASE5.md.
 
 ## FASE 4 — consumo energético, etapa 1
 
 Aplique a migration 004 com `pnpm db:migrate`. Abra um cliente e use a aba **Consumo e faturas**. Cada unidade mantém distribuidora, identificadores, titular, grupo tarifário, tipo de ligação, tensão e endereço. O histórico registra consumo, energia injetada, demanda máxima, dias faturados e origem do dado; a fatura registra valor, datas, número, bandeira e leituras. A indicação “base para dimensionamento” apenas informa se existem 12 meses recentes e não executa cálculo solar.
 
-O dimensionamento usa a média de até 12 consumos recentes, irradiação diária, desempenho global, potência do módulo e margem de segurança. Cada execução salva parâmetros e resultados. O menu **Equipamentos e kits** mantém módulos, inversores, estruturas, componentes e kits compostos. Ao vincular um kit, a quantidade é arredondada para cobrir a potência dimensionada e a composição é preservada como snapshot. A aba **Documentos** de clientes e oportunidades guarda PDFs manuais em armazenamento privado configurado por `DOCUMENT_STORAGE_DIR` e permite enviá-los pelo SMTP configurado. Inventários: `PHASE4-STAGE1.md`, `PHASE4-SIZING.md`, `PHASE4-CATALOG.md`, `PHASE4-DOCUMENTS.md` e `PHASE4-EMAIL.md`.
+O dimensionamento usa a média de até 12 consumos recentes, irradiação diária, desempenho global, potência do módulo e margem de segurança. Cada execução salva parâmetros e resultados. O menu **Equipamentos e kits** mantém módulos, inversores, estruturas, componentes e kits compostos. Ao vincular um kit, a quantidade é arredondada para cobrir a potência dimensionada e a composição é preservada como snapshot. A aba **Documentos** de clientes e oportunidades guarda PDFs manuais em armazenamento privado e permite enviá-los pelo SMTP configurado. Desenvolvimento usa `DOCUMENT_STORAGE_PROVIDER=local`; hospedagem usa `DOCUMENT_STORAGE_PROVIDER=supabase`, bucket privado e chave secreta somente no backend. Prepare com `pnpm storage:setup` e copie arquivos existentes com `pnpm storage:migrate` antes de ativar o provedor remoto. Inventários: `PHASE4-STAGE1.md`, `PHASE4-SIZING.md`, `PHASE4-CATALOG.md`, `PHASE4-DOCUMENTS.md` e `PHASE4-EMAIL.md`.
 
 ### Validação final da FASE 3 — 14/09/2026
 
 Lint e TypeScript aprovados; build de produção aprovado; 41/41 testes unitários e de integração e 15/15 testes de navegador aprovados. A suíte do navegador valida as FASES 1–3, incluindo criação e conversão comercial, Kanban por arrastar e por seletor, ganho/perda, agenda, follow-up, RBAC/API e responsividade. A verificação móvel espera o conteúdo carregar antes de confirmar que a largura do documento não excede o viewport; o deslocamento horizontal permanece contido no Kanban.
 
 A única saída auxiliar é o aviso do runner sobre `NO_COLOR` junto de `FORCE_COLOR`, sem impacto nos testes. As limitações já documentadas continuam: banco local legado WIN1252, SMTP externo não configurado e ausência intencional dos módulos das fases seguintes.
+
+## FASE 5 — contratos, vendas e financeiro
+
+Aplique a migration 009 com `npm run db:migrate`. O menu **Contratos** permite formalizar uma venda a partir de cliente/oportunidade, compor itens manuais ou do catálogo, definir descontos, entrada e parcelas, registrar pagamentos e acompanhar atrasos. A numeração é anual e atômica por organização.
+
+Os PDFs privados agora também podem pertencer diretamente ao contrato, possuem tipo comercial e aceitam o registro auditável de uma assinatura feita fora do CRM. Upload/download, hash, Storage e envio SMTP continuam usando a implementação da FASE 4. Inventário e limites: `PHASE5.md`.

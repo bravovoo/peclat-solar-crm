@@ -146,13 +146,13 @@ Kit: `name`, `code`, `description`, `items:[{equipment_id,quantity}]`. O servido
 |---|---|---|
 | GET | /api/documents?customer_id=UUID | Lista os documentos do cliente acessível. |
 | GET | /api/documents?opportunity_id=UUID | Lista os documentos da oportunidade acessível. |
-| POST | /api/documents | `multipart/form-data` com cliente, oportunidade, metadados e PDF; cria como rascunho. |
+| POST | /api/documents | `multipart/form-data` com cliente, oportunidade e/ou contrato, metadados e PDF; cria como rascunho. |
 | GET | /api/documents/{id} | Retorna documento e histórico completo de snapshots. |
 | PUT | /api/documents/{id} | Atualiza nome, valor, validade e observação; exige `version`. |
 | POST | /api/documents/{id}/status | Atualiza `{status,version}`. |
 | GET | /api/documents/{id}/file | Download autenticado do PDF com verificação SHA-256. |
 
-O upload recebe `customer_id`, `opportunity_id`, `name`, `budget_value`, `valid_until`, `notes` e `file`. Cliente e oportunidade são obrigatórios e precisam ter vínculo entre si. O PDF deve usar MIME `application/pdf`, extensão `.pdf`, cabeçalho `%PDF-` e no máximo 10 MB; o formulário completo aceita até 10 MB mais o envelope multipart. Status: `draft`, `sent`, `accepted`, `refused`. Todas as leituras e downloads aplicam organização e responsável. O caminho físico não é retornado pela API.
+O upload recebe `customer_id`, `opportunity_id` opcional, `contract_id` opcional, `document_type`, `name`, `budget_value`, `valid_until`, `notes` e `file`. Cliente e ao menos uma oportunidade ou contrato são obrigatórios e precisam ter vínculo entre si. O PDF deve usar MIME `application/pdf`, extensão `.pdf`, cabeçalho `%PDF-` e no máximo 10 MB; o formulário completo aceita até 10 MB mais o envelope multipart. Status: `draft`, `sent`, `accepted`, `refused`. Todas as leituras e downloads aplicam organização e responsável. O caminho físico não é retornado pela API.
 
 ### Envio do PDF por e-mail
 
@@ -163,3 +163,20 @@ O upload recebe `customer_id`, `opportunity_id`, `name`, `budget_value`, `valid_
 `recipient` deve ser um e-mail válido com até 254 caracteres; `subject` tem de 1 a 180 caracteres e rejeita quebras de linha; `message` tem de 1 a 10.000 caracteres. O servidor reaplica o acesso ao documento, confirma a integridade do PDF e usa `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` e `MAIL_FROM` somente no servidor.
 
 Após aceite do SMTP, a resposta contém documento e registro da entrega. Rascunhos passam para `sent`; outros status são preservados. SMTP ausente retorna 503 com mensagem de configuração. Falha de conexão/entrega retorna 502 e não grava envio. Não há envio automático, HTML, rastreamento de abertura ou geração de proposta.
+
+## FASE 5 — contratos e pagamentos
+
+| Método | Endpoint | Uso |
+|---|---|---|
+| GET / POST | /api/contracts | Lista com filtros / cria contrato e numeração atômica. |
+| GET / PUT | /api/contracts/{id} | Detalhe completo / edição com `version`. |
+| POST | /api/contracts/{id}/status | Altera `{status,version}`. Cancelamento exige permissão própria. |
+| POST | /api/contracts/{id}/payments | Registra pagamento em uma parcela. |
+| PUT | /api/contract-payments/{id} | Corrige pagamento com `version`. |
+| GET | /api/contract-dashboard | Totais contratado, recebido, a receber e em atraso. |
+| GET | /api/contract-alerts | Até 50 parcelas vencidas acessíveis. |
+| GET | /api/contract-options | Responsáveis e catálogo permitido para composição. |
+| GET | /api/documents?contract_id=UUID | Documentos vinculados ao contrato. |
+| POST | /api/documents/{id}/signature | Registra situação, data, signatário, observação e `version`. |
+
+Filtros de contrato: `q`, `status`, `owner`, `client_id`, `opportunity_id`, `from`, `to`, `page` e `pageSize`. Valores e totais enviados pelo navegador não são aceitos; o servidor deriva os cálculos a partir de `items`, desconto comercial e entrada. Pagamentos exigem parcela do mesmo contrato e nunca podem elevar o recebido acima do valor devido.

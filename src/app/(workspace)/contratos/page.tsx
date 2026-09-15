@@ -1,0 +1,2 @@
+import {ContractList} from '@/components/contracts/contract-list';import {pageActor} from '@/server/session';
+export default async function Page(){const actor=await pageActor();const allowed=actor.permissions.includes('contracts.all')||actor.permissions.includes('contracts.own');if(!allowed)return <div className="card"><h1>Acesso restrito</h1><p>Seu perfil não possui acesso a contratos.</p></div>;return <ContractList canCreate={actor.permissions.includes('contracts.create')}/>;}

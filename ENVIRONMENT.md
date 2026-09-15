@@ -4,6 +4,8 @@
 
 `DATABASE_URL`: conexão PostgreSQL obrigatória em runtime e migrations. `APP_URL`: origem exata permitida em mutações, sem caminho adicional. `SEED_ADMIN_EMAIL`, `SEED_ADMIN_NAME`, `SEED_ADMIN_PASSWORD`: somente bootstrap. Senha de 12–128 caracteres, nunca padrão. Seeds subsequentes não alteram senha nem elevam privilégios de conta preexistente.
 
+`DOCUMENT_STORAGE_PROVIDER`: `local` no desenvolvimento ou `supabase` na hospedagem. O modo local usa `DOCUMENT_STORAGE_DIR` (padrão `.local/documents`). O modo Supabase exige `SUPABASE_URL`, `SUPABASE_STORAGE_BUCKET` e, preferencialmente, `SUPABASE_SECRET_KEY`; `SUPABASE_SERVICE_ROLE_KEY` é aceita como alternativa legada. Configure apenas uma chave. Ela é exclusiva do servidor, nunca usa prefixo `NEXT_PUBLIC_` e não deve ser incluída no Git. O bucket deve permanecer privado, limitado a 10 MB e ao MIME `application/pdf`; `pnpm storage:setup` aplica essas propriedades.
+
 SMTP_HOST/PORT/SECURE/USER/PASSWORD e MAIL_FROM configuram o transporte de recuperação. SMTP_HOST vazio desabilita a recuperação com resposta de indisponibilidade. Falha de entrega não revela existência de usuário; invalida token criado e registra somente código de erro, sem destinatário ou token. Consulte logs operacionais para falhas. Localmente use Mailpit, sem envio para terceiros.
 
 META_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_BUSINESS_ACCOUNT_ID, WHATSAPP_VERIFY_TOKEN, META_APP_SECRET e GRAPH_API_VERSION estão reservadas; não são usadas pela FASE 1. Não colocar prefixo NEXT_PUBLIC em credenciais.
