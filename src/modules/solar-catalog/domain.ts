@@ -1,0 +1,13 @@
+import { z } from 'zod';
+import { uuid } from '@/modules/crm/domain';
+const text=(max:number)=>z.string().trim().max(max).default('');
+const optional=(max:number)=>z.union([z.number().positive().max(max),z.null()]).optional().default(null);
+export const equipmentCategories={module:'Módulo/painel',inverter:'Inversor',structure:'Estrutura',component:'Componente'} as const;
+export const equipmentUnits={unit:'un.',meter:'m',set:'conjunto'} as const;
+export const equipmentSchema=z.object({category:z.enum(['module','inverter','structure','component']),name:z.string().trim().min(2,'Informe o nome do equipamento.').max(180),manufacturer:text(120),model:text(120),sku:text(80),nominal_power_w:optional(100000000),efficiency_percent:optional(100),phases:z.union([z.number().int().min(1).max(3),z.null()]).optional().default(null),mppt_count:z.union([z.number().int().min(1).max(100),z.null()]).optional().default(null),unit:z.enum(['unit','meter','set']).default('unit'),technical_notes:text(4000),version:z.number().int().positive().optional()}).strict().refine(data=>!['module','inverter'].includes(data.category)||data.nominal_power_w!==null,{message:'Informe a potência nominal para módulos e inversores.',path:['nominal_power_w']});
+export const kitSchema=z.object({name:z.string().trim().min(2,'Informe o nome do kit.').max(180),code:text(80),description:text(4000),items:z.array(z.object({equipment_id:uuid,quantity:z.number().positive().max(1000000)}).strict()).min(1,'Adicione ao menos um item ao kit.').max(500),version:z.number().int().positive().optional()}).strict();
+export const kitSelectionSchema=z.object({sizing_id:uuid,kit_id:uuid}).strict();
+export type SolarEquipment=z.infer<typeof equipmentSchema>&{id:string;version:number;status:'active'|'archived';created_at:string;updated_at:string};
+export type SolarKitItem={equipment_id:string;quantity:number;name:string;category:keyof typeof equipmentCategories;manufacturer:string;model:string;nominal_power_w:number|null;unit:keyof typeof equipmentUnits};
+export type SolarKit=Omit<z.infer<typeof kitSchema>,'items'|'version'>&{id:string;version:number;status:'active'|'archived';items:SolarKitItem[];module_count:number;dc_power_kwp:number;inverter_power_kw:number;created_at:string;updated_at:string};
+export type KitSelection={id:string;sizing_id:string;kit_id:string;kit_name:string;customer_id:string;consumer_unit_id:string;actor_name:string;kit_quantity:number;module_count:number;dc_power_kwp:number;inverter_power_kw:number;kit_snapshot:SolarKit;created_at:string};

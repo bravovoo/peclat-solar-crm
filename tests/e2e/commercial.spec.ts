@@ -1,0 +1,57 @@
+import { test,expect,type Page,type APIRequestContext } from '@playwright/test';
+const password='Peclat teste seguro 2026';const origin='http://localhost:3100';
+async function signIn(page:Page,email='admin@e2e.local'){await page.goto('/login');await page.getByLabel('E-mail profissional').fill(email);await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();}
+async function apiLogin(request:APIRequestContext,email:string){const response=await request.post('/api/auth/login',{headers:{origin},data:{organization:'peclat-solar',email,password}});expect(response.ok()).toBeTruthy();}
+test('vendedor cria lead, altera estágio, adiciona nota, contato, tarefa e converte',async({page})=>{
+ await signIn(page,'seller@e2e.local');await page.getByRole('link',{name:'Leads',exact:true}).click();await page.getByRole('link',{name:'Novo lead',exact:true}).click();
+ await page.getByLabel('Nome *',{exact:true}).fill('Projeto Solar E2E');await page.getByLabel('WhatsApp',{exact:true}).fill('(31) 99999-4321');await page.getByLabel('Consumo médio mensal (kWh)').fill('820');await page.getByLabel('Cidade',{exact:true}).fill('Contagem');await page.getByLabel('Estado (UF)',{exact:true}).fill('MG');
+ await page.getByRole('button',{name:'Criar cadastro',exact:true}).click();await expect(page.getByRole('heading',{name:'Projeto Solar E2E',exact:true})).toBeVisible();
+ const leadUrl=page.url();
+ await page.getByLabel('Alterar estágio').selectOption('qualified');await expect(page.getByRole('status').filter({hasText:'Estágio atualizado'})).toBeVisible();
+ await page.getByRole('button',{name:'Notas',exact:true}).click();await page.getByRole('button',{name:'Adicionar nota',exact:true}).click();await page.getByLabel('Nota interna',{exact:true}).fill('Solicitar a conta de energia para dimensionar.');await page.getByRole('button',{name:'Salvar',exact:true}).click();await expect(page.getByText('Solicitar a conta de energia para dimensionar.',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Contatos',exact:true}).click();await page.getByRole('button',{name:'Adicionar contato',exact:true}).click();await page.getByLabel('Nome',{exact:true}).fill('Responsável E2E');await page.getByLabel('Contato principal',{exact:true}).check();await page.getByRole('button',{name:'Salvar',exact:true}).click();await expect(page.getByRole('heading',{name:'Responsável E2E Principal'})).toBeVisible();
+ await page.getByRole('button',{name:'Criar tarefa',exact:true}).first().click();await page.getByLabel('Título da tarefa').fill('Analisar consumo');await page.getByLabel('Prazo (horário do seu dispositivo)').fill('2026-10-01T10:00');await page.getByRole('button',{name:'Salvar',exact:true}).click();await expect(page.getByRole('heading',{name:'Analisar consumo'})).toBeVisible();
+ await page.getByRole('button',{name:'Marcar como concluída'}).click();await expect(page.getByText('Concluída',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Converter em cliente'}).click();await page.getByRole('button',{name:'Confirmar',exact:true}).click();await expect(page).toHaveURL(/\/clientes\/[a-f0-9-]+$/);await expect(page.getByText('Histórico do lead original preservado.',{exact:false})).toBeVisible();
+ await page.getByRole('button',{name:'Notas',exact:true}).click();await expect(page.getByText('Solicitar a conta de energia para dimensionar.',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Contatos',exact:true}).click();await expect(page.getByRole('heading',{name:'Responsável E2E Principal'})).toBeVisible();
+ await page.goto(leadUrl);await expect(page.getByText('Convertido',{exact:true})).toBeVisible();await expect(page.getByRole('link',{name:'Abrir cliente vinculado'})).toBeVisible();
+});
+test('cadastro PJ, edição, busca global, tags e exportação filtrada',async({page})=>{
+ await signIn(page);await page.getByRole('link',{name:'Tags',exact:true}).click();await page.getByRole('button',{name:'Criar tag',exact:true}).click();await page.getByLabel('Nome da tag').fill('Solar E2E');await page.getByRole('button',{name:'Salvar tag'}).click();await expect(page.getByText('Solar E2E',{exact:true})).toBeVisible();
+ await page.getByRole('link',{name:'Empresas',exact:true}).click();await page.getByRole('link',{name:'Nova empresa',exact:true}).click();await page.getByLabel('Razão social *').fill('Comércio E2E Solar');await page.getByLabel('Nome fantasia').fill('Loja Solar');await page.getByLabel('Solar E2E',{exact:true}).check();await page.getByRole('button',{name:'Criar cadastro'}).click();await expect(page.getByRole('heading',{name:'Comércio E2E Solar',exact:true})).toBeVisible();
+ await page.getByRole('link',{name:'Editar',exact:true}).click();await page.getByLabel('Cidade',{exact:true}).fill('Betim');await page.getByRole('button',{name:'Salvar alterações'}).click();await expect(page.getByText('Betim',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Buscar no CRM',exact:true}).click();await page.getByLabel('Nome, telefone, e-mail, documento ou empresa').fill('Comércio E2E');await page.getByRole('link',{name:'Comércio E2E Solar Abrir →'}).click();await expect(page.getByRole('heading',{name:'Comércio E2E Solar',exact:true})).toBeVisible();
+ await page.getByRole('link',{name:'Clientes',exact:true}).click();await page.getByRole('link',{name:'Novo cliente',exact:true}).click();await page.getByLabel('Nome *',{exact:true}).fill('Cliente Direto E2E');await page.getByRole('button',{name:'Criar cadastro'}).click();await expect(page.getByRole('heading',{name:'Cliente Direto E2E',exact:true})).toBeVisible();
+ await page.getByRole('link',{name:'Clientes',exact:true}).click();await page.getByRole('textbox',{name:'Pesquisar clientes'}).fill('Cliente Direto E2E');await expect(page.getByRole('link',{name:'Cliente Direto E2E',exact:true})).toBeVisible();const downloadPromise=page.waitForEvent('download');await page.getByRole('button',{name:'Exportar CSV'}).click();expect((await downloadPromise).suggestedFilename()).toBe('peclat-customers.csv');
+});
+test('API impede IDOR, duplicação sem permissão, tags alheias e perda por edição concorrente',async({playwright})=>{
+ const admin=await playwright.request.newContext({baseURL:origin});const seller=await playwright.request.newContext({baseURL:origin});await apiLogin(admin,'admin@e2e.local');await apiLogin(seller,'seller@e2e.local');
+ const response=await admin.post('/api/leads',{headers:{origin},data:{name:'Lead privado API',email:'api-private@example.com'}});expect(response.status()).toBe(201);const record=await response.json();
+ expect((await seller.get('/api/leads/'+record.id)).status()).toBe(404);
+ expect((await seller.post('/api/notes',{headers:{origin},data:{record_id:record.id,body:'Não autorizado'}})).status()).toBe(404);
+ const duplicate=await seller.post('/api/leads',{headers:{origin},data:{name:'Duplicado API',email:'api-private@example.com',allow_duplicate:true}});expect(duplicate.status()).toBe(409);expect((await duplicate.json()).matches).toEqual([]);
+ expect((await seller.post('/api/tags',{headers:{origin},data:{name:'Proibida'}})).status()).toBe(403);
+ expect((await admin.post('/api/leads',{headers:{origin},data:{name:'Fora da organização',tag_ids:['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']}})).status()).toBe(400);
+ const update=await admin.put('/api/leads/'+record.id,{headers:{origin},data:{name:'Lead privado API atualizado',version:record.version}});expect(update.status()).toBe(200);
+ expect((await admin.put('/api/leads/'+record.id,{headers:{origin},data:{name:'Edição antiga',version:record.version}})).status()).toBe(409);
+ const exported=await seller.get('/api/leads/export?status=all');expect(await exported.text()).not.toContain('Lead privado API atualizado');
+ expect((await seller.get('/api/search?q=api-private')).status()).toBe(200);expect(JSON.stringify(await (await seller.get('/api/search?q=api-private')).json())).not.toContain('Lead privado');
+ await admin.dispose();await seller.dispose();
+});
+test('arquivar, reativar e excluir exigem confirmação visual',async({page})=>{
+ await signIn(page);await page.goto('/leads/novo');await page.getByLabel('Nome *',{exact:true}).fill('Lead para encerrar E2E');await page.getByRole('button',{name:'Criar cadastro'}).click();await expect(page.getByRole('heading',{name:'Lead para encerrar E2E',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Arquivar',exact:true}).click();await page.getByRole('button',{name:'Confirmar',exact:true}).click();await expect(page.getByText('Arquivado',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Reativar',exact:true}).click();await page.getByRole('button',{name:'Confirmar',exact:true}).click();await expect(page.getByText('Ativo',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Excluir',exact:true}).click();await expect(page.getByRole('dialog',{name:'Excluir lead?'})).toBeVisible();await page.getByRole('button',{name:'Cancelar',exact:true}).click();await expect(page.getByRole('heading',{name:'Lead para encerrar E2E',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Excluir',exact:true}).click();await page.getByRole('button',{name:'Confirmar',exact:true}).click();await expect(page).toHaveURL(/\/leads$/);await page.getByRole('textbox',{name:'Pesquisar leads'}).fill('Lead para encerrar E2E');await expect(page.getByRole('heading',{name:'Nenhum cadastro encontrado'})).toBeVisible();
+});
+
+
+test('duplicidade oferece abertura, cancelamento e confirmação; cadastros se adaptam ao celular',async({page})=>{
+ await signIn(page);await page.goto('/leads/novo');await page.getByLabel('Nome *',{exact:true}).fill('Lead duplicidade visual');await page.getByLabel('E-mail',{exact:true}).fill('duplicate-ui@example.com');await page.getByRole('button',{name:'Criar cadastro'}).click();await expect(page.getByRole('heading',{name:'Lead duplicidade visual',exact:true})).toBeVisible();
+ for(const width of [320,390,768]){await page.setViewportSize({width,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();}
+ await page.goto('/leads/novo');await page.setViewportSize({width:320,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+ await page.getByLabel('Nome *',{exact:true}).fill('Outra solicitação visual');await page.getByLabel('E-mail',{exact:true}).fill('DUPLICATE-UI@example.com');await page.getByRole('button',{name:'Criar cadastro'}).click();const dialog=page.getByRole('dialog',{name:'Encontramos um cadastro semelhante'});await expect(dialog).toBeVisible();await expect(dialog.getByRole('link',{name:'Lead duplicidade visual · Abrir cadastro'})).toBeVisible();await dialog.getByRole('button',{name:'Cancelar',exact:true}).click();await expect(page.getByLabel('Nome *',{exact:true})).toHaveValue('Outra solicitação visual');
+ await page.getByRole('button',{name:'Criar cadastro'}).click();await dialog.getByRole('button',{name:'Continuar mesmo assim'}).click();await expect(page.getByRole('heading',{name:'Outra solicitação visual',exact:true})).toBeVisible();await page.getByRole('link',{name:'Voltar para leads'}).click();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+});

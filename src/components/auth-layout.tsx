@@ -1,0 +1,5 @@
+import { Brand } from './brand';
+import { Sun, ShieldCheck, Zap } from 'lucide-react';
+export function AuthLayout({ children }: {children: React.ReactNode}) {
+  return <main className="auth-layout"><section className="auth-story"><Brand/><div className="story-content"><span className="eyebrow">ENERGIA QUE CONECTA</span><h1>Grandes projetos<br/>começam com<br/><em>boas conexões.</em></h1><p>Mais clareza para sua equipe.<br/>Mais energia para cada oportunidade.</p><div className="solar-illustration" aria-hidden="true"><Sun className="illustration-sun" size={64}/><div className="panel-grid">{Array.from({length:12},(_,i)=><span key={i}/>)}</div><span className="illustration-orbit"/></div></div><div className="story-footer"><Zap size={16}/> Do primeiro contato à energia gerada.</div></section><section className="auth-main"><div className="mobile-brand"><Brand/></div><div className="auth-card">{children}<div className="secure-note"><ShieldCheck size={16}/> Ambiente exclusivo da sua equipe</div></div><footer>Peclat Solar · Tecnologia a favor da sua operação.</footer></section></main>;
+}

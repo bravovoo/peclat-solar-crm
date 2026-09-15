@@ -1,0 +1,4 @@
+import {pageActor} from '@/server/session';
+import {crmAccess,crmOptions,getRecord} from '@/modules/crm/repository';
+import {OpportunityForm} from '@/components/commercial/opportunity-form';
+export default async function Page({searchParams}:{searchParams:Promise<{record_id?:string}>}){const actor=await pageActor();crmAccess(actor);const options=await crmOptions(actor),q=await searchParams;const record=q.record_id?await getRecord(actor,q.record_id):undefined;return <><div className="page-heading"><div><span className="eyebrow blue">OPERAÇÃO COMERCIAL</span><h1>Nova oportunidade</h1></div></div><section className="card"><OpportunityForm owners={options.owners} userId={actor.userId} record={record}/></section></>;}

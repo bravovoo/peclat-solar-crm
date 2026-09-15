@@ -1,0 +1,29 @@
+'use client';
+import {useState} from 'react';
+import Link from 'next/link';
+import {useRemote} from '@/components/crm/use-remote';
+import {api,errorMessage} from '@/components/crm/api';
+import {DocumentWorkspace} from '@/components/documents/document-workspace';
+import {opportunityStages,eventLabels,money,lossReasons,type Opportunity} from '@/modules/commercial/domain';
+import {priorities} from '@/modules/crm/domain';
+import {OpportunityForm,type Owners} from './opportunity-form';
+import {TaskWorkspace} from './task-workspace';
+type Feed={items:{id:string;action?:string;detail?:string;body?:string;actor_name:string;created_at:string;record_id:string|null}[];total:number};
+
+export function OpportunityDetail({initial,owners,userId}:{initial:Opportunity;owners:Owners;userId:string}){
+ const [o,setO]=useState(initial),[editing,setEditing]=useState(false),[tab,setTab]=useState('summary'),[page,setPage]=useState(1),[revision,setRevision]=useState(0),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
+ const feed=useRemote<Feed>(['activities','notes'].includes(tab)?`/api/opportunities/${o.id}/${tab}?page=${page}`:null,revision);
+ async function note(event:React.FormEvent<HTMLFormElement>){event.preventDefault();const form=event.currentTarget;setBusy(true);try{await api(`/api/opportunities/${o.id}/notes`,'POST',{body:new FormData(form).get('body')});form.reset();setRevision(value=>value+1);setNotice('Nota interna registrada.');setError('');}catch(reason){setError(errorMessage(reason));}finally{setBusy(false);}}
+ if(editing)return <section className="card"><h1>Editar oportunidade</h1><OpportunityForm initial={o} owners={owners} userId={userId} onSaved={value=>{setO(value);setEditing(false);setRevision(current=>current+1);}}/></section>;
+ const info=(label:string,value:React.ReactNode)=><div><dt>{label}</dt><dd>{value||'Não informado'}</dd></div>;
+ const tabs={summary:'Resumo',activities:'Histórico e atividades',notes:'Notas',tasks:'Tarefas',documents:'Documentos'};
+ return <><Link className="back-link" href="/pipeline">← Voltar ao pipeline</Link><div className="page-heading"><div><span className="eyebrow blue">OPERAÇÃO COMERCIAL</span><h1>{o.title}</h1><div className="detail-meta"><span className="badge">{opportunityStages[o.stage]}</span><span>{o.owner_name}</span><strong>{money(o.estimated_value)}</strong></div></div><button className="button primary" onClick={()=>setEditing(true)}>Editar oportunidade</button></div>{notice&&<p role="status" className="crm-notice">{notice}</p>}{error&&<p role="alert" className="error-box">{error}</p>}
+ <div className="crm-tabs">{Object.entries(tabs).map(([key,label])=><button key={key} aria-pressed={tab===key} className={tab===key?'selected':''} onClick={()=>{setTab(key);setPage(1);}}>{label}</button>)}</div>
+ <section className="card detail-content">
+  {tab==='summary'&&<><h2>Dados comerciais</h2><dl className="crm-info-grid">{info('Etapa',opportunityStages[o.stage])}{info('Probabilidade',o.probability+'%')}{info('Prioridade',priorities[o.priority])}{info('Origem',o.source)}{info('Abertura',o.opened_on.split('-').reverse().join('/'))}{info('Previsão de fechamento',o.expected_close?.split('-').reverse().join('/'))}{info('Lead',o.lead_id&&<Link href={'/leads/'+o.lead_id}>{o.lead_name}</Link>)}{info('Cliente',o.customer_id&&<Link href={'/clientes/'+o.customer_id}>{o.customer_name}</Link>)}{info('Empresa',o.company_id&&<Link href={'/empresas/'+o.company_id}>{o.company_name}</Link>)}{info('Contato',o.contact_name)}</dl>{o.closed_at&&<div className="crm-notice">Fechada em {new Date(o.closed_at).toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'})} · {money(o.closed_value??0)} · Responsável: {o.closed_owner_name}{o.status==='lost'&&' · '+lossReasons[o.loss_reason as keyof typeof lossReasons]}</div>}<h2>Observações</h2><p className="preserve-text">{o.observations||'Nenhuma observação registrada.'}</p><p className="muted future-note">Esta oportunidade mantém os vínculos com os cadastros originais e seus PDFs manuais.</p></>}
+  {tab==='documents'&&<DocumentWorkspace customerId={o.customer_id} opportunityId={o.id} opportunityTitle={o.title}/>} 
+  {tab==='tasks'&&<><TaskWorkspace owners={owners} userId={userId} relation={{id:o.id,name:o.title,kind:'opportunity'}}/>{(o.lead_id||o.customer_id||o.company_id)&&<Link className="back-link" href={'/tarefas?record_id='+(o.lead_id??o.customer_id??o.company_id)}>Ver tarefas do cadastro original →</Link>}</>}
+  {tab==='notes'&&<form className="crm-form note-composer" onSubmit={note}><label className="crm-field"><span>Nova nota interna</span><textarea name="body" required maxLength={4000} rows={3}/></label><button className="button primary" disabled={busy}>Adicionar nota</button><small className="muted">Uso interno. Nenhuma mensagem será enviada.</small></form>}
+  {['activities','notes'].includes(tab)&&<>{feed.loading&&<p role="status" className="crm-loading">Carregando histórico…</p>}{feed.error&&<p role="alert" className="error-box">{feed.error}</p>}{feed.data?.items.map(item=><article className="crm-feed-item" key={item.id}><div className="crm-feed-heading"><strong>{item.action?eventLabels[item.action]??'Atividade do cadastro':'Nota interna'}{item.record_id?' · Cadastro original':''}</strong><time>{new Date(item.created_at).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})}</time></div><small>{item.actor_name}</small><p className="preserve-text">{item.body??item.detail}</p></article>)}{feed.data?.total===0&&<div className="empty-state"><h2>Nenhum registro nesta seção</h2></div>}{feed.data&&<div className="crm-pagination"><span>{feed.data.total} registros</span><div><button className="button secondary" disabled={page===1} onClick={()=>setPage(page-1)}>Anterior</button><button className="button secondary" disabled={page*20>=feed.data.total} onClick={()=>setPage(page+1)}>Próxima</button></div></div>}</>}
+ </section></>;
+}
