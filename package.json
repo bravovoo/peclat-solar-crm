@@ -50,8 +50,7 @@
     "typescript": "5.9.3"
   },
   "pnpm": {
-    "ignoredBuiltDependencies": [
-      "@embedded-postgres/linux-x64"
-    ]
+  "allowBuilds": {
+    "@embedded-postgres/linux-x64": false
   }
 }
