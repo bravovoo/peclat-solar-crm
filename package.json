@@ -48,9 +48,5 @@
     "tailwindcss": "4.3.3",
     "tsx": "4.23.13",
     "typescript": "5.9.3"
-  },
-  "pnpm": {
-  "allowBuilds": {
-    "@embedded-postgres/linux-x64": false
   }
 }
