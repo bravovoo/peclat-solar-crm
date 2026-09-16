@@ -8,6 +8,8 @@ declare global {
 }
 
 const globalDb = globalThis as unknown as { peclatPool?: pg.Pool; peclatPoolUrl?: string };
+type Database = Pick<pg.Pool, 'query' | 'end'>;
+type QueryClient = Pick<pg.Client, 'query'>;
 
 function connection() {
   let cloudflareEnv: CloudflareEnv | undefined;
@@ -25,24 +27,43 @@ function connection() {
   return { connectionString: process.env.DATABASE_URL, hyperdrive: false };
 }
 
-export function database() {
-  const config = connection();
-  if (globalDb.peclatPool && globalDb.peclatPoolUrl === config.connectionString) return globalDb.peclatPool;
+function localPool(connectionString: string) {
+  if (globalDb.peclatPool && globalDb.peclatPoolUrl === connectionString) return globalDb.peclatPool;
   const pool = new pg.Pool({
-    connectionString: config.connectionString,
-    max: config.hyperdrive ? 1 : 10,
-    maxUses: config.hyperdrive ? 1 : Infinity,
+    connectionString,
+    max: 10,
     connectionTimeoutMillis: 5000,
-    idleTimeoutMillis: config.hyperdrive ? 1000 : 30000,
+    idleTimeoutMillis: 30000,
     statement_timeout: 10000,
   });
   pool.on('error', () => console.error('database_idle_connection_failed'));
   globalDb.peclatPool = pool;
-  globalDb.peclatPoolUrl = config.connectionString;
+  globalDb.peclatPoolUrl = connectionString;
   return pool;
 }
-export async function transaction<T>(work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-  const client = await database().connect();
+
+function hyperdriveClient(connectionString: string) {
+  return new pg.Client({ connectionString, connectionTimeoutMillis: 5000, statement_timeout: 10000 });
+}
+
+export function database(): Database {
+  const config = connection();
+  if (!config.hyperdrive) return localPool(config.connectionString);
+  return {
+    query: (async (text: string, values?: unknown[]) => {
+      const client = hyperdriveClient(config.connectionString);
+      try {
+        await client.connect();
+        return await client.query(text, values);
+      } finally {
+        await client.end();
+      }
+    }) as pg.Pool['query'],
+    end: async () => {},
+  };
+}
+
+async function runTransaction<T>(client: QueryClient, work: (client: QueryClient) => Promise<T>): Promise<T> {
   try {
     await client.query('BEGIN');
     const result = await work(client);
@@ -51,5 +72,24 @@ export async function transaction<T>(work: (client: pg.PoolClient) => Promise<T>
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
-  } finally { client.release(); }
+  }
+}
+
+export async function transaction<T>(work: (client: QueryClient) => Promise<T>): Promise<T> {
+  const config = connection();
+  if (config.hyperdrive) {
+    const client = hyperdriveClient(config.connectionString);
+    try {
+      await client.connect();
+      return await runTransaction(client, work);
+    } finally {
+      await client.end();
+    }
+  }
+  const client = await localPool(config.connectionString).connect();
+  try {
+    return await runTransaction(client, work);
+  } finally {
+    client.release();
+  }
 }

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
 import EmbeddedPostgres from '../scripts/embedded-db';
-import { database } from '../src/server/db';
+import { database, transaction } from '../src/server/db';
 import { migrate } from '../scripts/migrate';
 import { seed } from '../scripts/seed';
 import { login, sessionActor, logout, requestRecovery, resetPassword, consumeRateLimit } from '../src/modules/auth/service';
@@ -38,6 +38,38 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
   assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,10);
+});
+test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
+  const key=Symbol.for('__cloudflare-context__');
+  const scope=globalThis as unknown as Record<symbol,unknown>;
+  const previous=scope[key];
+  scope[key]={env:{HYPERDRIVE:{connectionString:process.env.DATABASE_URL}}};
+  try{
+    const first=(await database().query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0].pid;
+    const second=(await database().query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0].pid;
+    assert.notEqual(first,second);
+    const [a,b]=await Promise.all([
+      database().query<{pid:number}>('SELECT pg_backend_pid() pid'),
+      database().query<{pid:number}>('SELECT pg_backend_pid() pid'),
+    ]);
+    assert.notEqual(a.rows[0].pid,b.rows[0].pid);
+    const closed=await database().query<{total:number}>('SELECT count(*)::int total FROM pg_stat_activity WHERE pid=ANY($1::int[])',[[first,second,a.rows[0].pid,b.rows[0].pid]]);
+    assert.equal(closed.rows[0].total,0);
+    const transactionPid=await transaction(async client=>{
+      const started=(await client.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0].pid;
+      const continued=(await client.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0].pid;
+      assert.equal(started,continued);
+      return started;
+    });
+    assert.notEqual(transactionPid,(await database().query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0].pid);
+    await assert.rejects(()=>transaction(async client=>{
+      await client.query('INSERT INTO audit_logs(organization_id,action) VALUES ($1,$2)',[orgA,'hyperdrive.rollback']);
+      throw new Error('rollback esperado');
+    }),/rollback esperado/);
+    assert.equal((await database().query<{total:number}>("SELECT count(*)::int total FROM audit_logs WHERE action='hyperdrive.rollback'")).rows[0].total,0);
+  }finally{
+    if(previous===undefined)delete scope[key];else scope[key]=previous;
+  }
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
