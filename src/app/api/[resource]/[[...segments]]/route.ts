@@ -15,6 +15,8 @@ import {contractAlerts,contractDashboard,contractOptions,getContractDetail,listC
 import {getInstallationDetail,installationOptions,listInstallations,saveInstallation,setInstallationStatus} from '@/modules/installations/repository';
 import {addInstallationFile,deleteInstallationFile,getInstallationFile,saveInstallationDelivery,saveInstallationIssue,updateChecklistItem} from '@/modules/installations/execution';
 import {MAX_INSTALLATION_FILE_BYTES} from '@/modules/installations/file-storage';
+import {addMaintenanceItem,addTicketComment,getMaintenance,getTicket,getWarranty,linkTask,listClaims,listLinkedTasks,listMaintenanceItems,listMaintenances,listTickets,listWarranties,postSalesDashboard,postSalesOptions,saveClaim,saveMaintenance,saveTicket,saveWarranty,ticketHistory} from '@/modules/post-sales/repository';
+import {addPostSalesFile,deletePostSalesFile,getPostSalesFile,listPostSalesFiles} from '@/modules/post-sales/files';
 type Context={params:Promise<{resource:string;segments?:string[]}>};
 const resources:Record<string,Kind>={leads:'lead',customers:'customer',companies:'company'};
 const respond=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
@@ -24,6 +26,26 @@ async function handle(request:Request,context:Context){
   if(segments.length>2)throw new AccessError(404,'Não encontrado.');
   const url=new URL(request.url);const query=Object.fromEntries(url.searchParams);const kind=resources[resource];
   if(request.method==='GET'){
+   if(resource==='post-sales-files'&&id&&action==='file'){
+    const {file,bytes}=await getPostSalesFile(actor,id),filename=file.original_filename.replace(/[^a-zA-Z0-9._-]/g,'_');
+    const disposition=file.mime_type.startsWith('image/')&&query.download!=='1'?'inline':'attachment';
+    return new NextResponse(new Uint8Array(bytes),{headers:{'Content-Type':file.mime_type,'Content-Length':String(bytes.length),'Content-Disposition':`${disposition}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(file.original_filename)}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+   }
+   if(resource==='post-sales-dashboard'&&!id)return respond(await postSalesDashboard(actor));
+   if(resource==='post-sales-options'&&!id)return respond(await postSalesOptions(actor));
+   if(resource==='post-sales-warranties'&&!action)return respond(id?await getWarranty(actor,id):await listWarranties(actor,query));
+   if(resource==='post-sales-tickets'){
+    if(id&&action==='history')return respond(await ticketHistory(actor,id));
+    if(id&&action==='tasks')return respond(await listLinkedTasks(actor,'ticket',id));
+    if(!action)return respond(id?await getTicket(actor,id):await listTickets(actor,query));
+   }
+   if(resource==='post-sales-claims'&&!id)return respond(await listClaims(actor,query.warranty_id,query.ticket_id));
+   if(resource==='post-sales-maintenances'){
+    if(id&&action==='items')return respond(await listMaintenanceItems(actor,id));
+    if(id&&action==='tasks')return respond(await listLinkedTasks(actor,'maintenance',id));
+    if(!action)return respond(id?await getMaintenance(actor,id):await listMaintenances(actor,query));
+   }
+   if(resource==='post-sales-files'&&!id)return respond(await listPostSalesFiles(actor,z.enum(['warranty','ticket','maintenance']).parse(query.parent_type),uuid.parse(query.parent_id)));
    if(resource==='installation-files'&&id&&action==='file'){
     const {file,bytes}=await getInstallationFile(actor,id);const filename=file.original_filename.replace(/[^a-zA-Z0-9._-]/g,'_');
     const disposition=file.kind==='photo'&&query.download!=='1'?'inline':'attachment';
@@ -74,6 +96,36 @@ async function handle(request:Request,context:Context){
    if(resource==='dashboard')return respond(await dashboard(actor));
    if(['activities','notes','contacts','tasks'].includes(resource))return respond(await recordFeed(actor,uuid.parse(query.record_id),resource as 'activities'|'notes'|'contacts'|'tasks',z.coerce.number().int().min(1).max(100000).parse(query.page??1)));
   }else{
+   if(resource==='post-sales-files'&&request.method==='POST'&&!id){
+    const form=await readMultipartMutation(request,MAX_INSTALLATION_FILE_BYTES+131072),file=form.get('file');
+    if(!(file instanceof File))throw new AccessError(400,'Selecione um arquivo.');
+    const metadata=Object.fromEntries(['parent_type','parent_id','name','description','category'].map(key=>[key,String(form.get(key)??'')]));
+    return respond(await addPostSalesFile(actor,metadata,{name:file.name,type:file.type,bytes:new Uint8Array(await file.arrayBuffer())}),201);
+   }
+   if(resource==='post-sales-files'&&request.method==='DELETE'&&id&&!action){const body=z.object({version:z.number().int().positive()}).strict().parse(await readMutation(request));return respond(await deletePostSalesFile(actor,id,body.version));}
+   if(resource==='post-sales-warranties'){
+    const body=await readMutation(request);
+    if(request.method==='POST'&&!id)return respond(await saveWarranty(actor,body),201);
+    if(request.method==='PUT'&&id&&!action)return respond(await saveWarranty(actor,body,id));
+   }
+   if(resource==='post-sales-tickets'){
+    const body=await readMutation(request);
+    if(request.method==='POST'&&!id)return respond(await saveTicket(actor,body),201);
+    if(request.method==='PUT'&&id&&!action)return respond(await saveTicket(actor,body,id));
+    if(request.method==='POST'&&id&&action==='comments')return respond(await addTicketComment(actor,id,z.object({body:z.string()}).strict().parse(body).body),201);
+   }
+   if(resource==='post-sales-claims'){
+    const body=await readMutation(request);
+    if(request.method==='POST'&&!id)return respond(await saveClaim(actor,body),201);
+    if(request.method==='PUT'&&id&&!action)return respond(await saveClaim(actor,body,id));
+   }
+   if(resource==='post-sales-maintenances'){
+    const body=await readMutation(request);
+    if(request.method==='POST'&&!id)return respond(await saveMaintenance(actor,body),201);
+    if(request.method==='PUT'&&id&&!action)return respond(await saveMaintenance(actor,body,id));
+    if(request.method==='POST'&&id&&action==='items')return respond(await addMaintenanceItem(actor,{...z.record(z.string(),z.unknown()).parse(body),maintenance_id:id}),201);
+   }
+   if(resource==='post-sales-task-links'&&request.method==='POST'&&!id)return respond(await linkTask(actor,await readMutation(request)),201);
    if(resource==='installation-files'&&request.method==='POST'&&!id){
     const form=await readMultipartMutation(request,MAX_INSTALLATION_FILE_BYTES+131072),file=form.get('file');
     if(!(file instanceof File))throw new AccessError(400,'Selecione um arquivo.');

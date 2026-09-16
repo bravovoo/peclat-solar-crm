@@ -6,7 +6,7 @@ import {MAX_PDF_BYTES} from '@/modules/documents/storage';
 import {downloadSupabaseObject,removeSupabaseObject,uploadSupabaseObject} from '@/modules/documents/supabase-storage';
 
 export const MAX_INSTALLATION_FILE_BYTES=MAX_PDF_BYTES;
-const keyPattern=/^[0-9a-f-]{36}\/installations\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(?:png|jpe?g|webp|pdf|xlsx?|csv|docx?|txt)$/;
+const keyPattern=/^[0-9a-f-]{36}\/(?:installations\/[0-9a-f-]{36}|post-sales\/(?:warranty|ticket|maintenance)\/[0-9a-f-]{36})\/[0-9a-f-]{36}\.(?:png|jpe?g|webp|pdf|xlsx?|csv|docx?|txt)$/;
 const formats:Record<string,{mime:string;kind:'photo'|'document'}>={
  png:{mime:'image/png',kind:'photo'},jpg:{mime:'image/jpeg',kind:'photo'},jpeg:{mime:'image/jpeg',kind:'photo'},webp:{mime:'image/webp',kind:'photo'},
  pdf:{mime:'application/pdf',kind:'document'},xlsx:{mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',kind:'document'},

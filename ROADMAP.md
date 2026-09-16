@@ -5,7 +5,7 @@
 - FASE 3 — Implementada: oportunidades ligadas a cadastros, Kanban com movimentação e histórico, fechamento ganho/perdido, tarefas ampliadas, agenda de dia/semana, follow-up, indicadores e busca. Migration 003 incremental; DEMO separado da operação real. Ver PHASE3.md para validação e limites.
 - FASE 4 — Implementada: consumo/faturas, dimensionamento solar, catálogo de equipamentos, kits comerciais, documentos/orçamentos manuais em PDF e envio por e-mail.
 - FASE 5 — Implementada: contratos vinculados a clientes/oportunidades, itens, cálculos comerciais, numeração anual atômica, parcelas, pagamentos parciais, alertas de atraso, documentos comerciais e registro de assinatura externa. Não inclui gerador automático de proposta.
-- FASE 6 — Instalação, checklists, fotos, homologação e pós-venda.
+- FASE 6 — Instalação, checklists, fotos, homologação e pós-venda. As etapas 6.1–6.4 estão concluídas: instalações, execução/entrega e garantias, chamados e manutenção. WhatsApp, automações, portal do cliente, estoque, telemetria e Fase 7 permanecem fora deste escopo.
 - FASE 7 — WhatsApp Cloud API oficial, inbox, webhooks, templates e distribuição.
 - FASE 8 — Automações, notificações, relatórios e ampliação da auditoria.
 - FASE 9 — Performance, segurança, testes, UX e mobile.

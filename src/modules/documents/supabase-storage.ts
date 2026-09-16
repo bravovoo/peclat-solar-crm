@@ -3,7 +3,7 @@ import {AccessError} from '@/modules/auth/policy';
 const DEFAULT_BUCKET='peclat-crm-documents';
 const PDF_LIMIT=10*1024*1024;
 const keyPattern=/^[0-9a-f-]{36}\/[0-9a-f-]{36}\.pdf$/;
-const installationKeyPattern=/^[0-9a-f-]{36}\/installations\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(?:png|jpe?g|webp|pdf|xlsx?|csv|docx?|txt)$/;
+const installationKeyPattern=/^[0-9a-f-]{36}\/(?:installations\/[0-9a-f-]{36}|post-sales\/(?:warranty|ticket|maintenance)\/[0-9a-f-]{36})\/[0-9a-f-]{36}\.(?:png|jpe?g|webp|pdf|xlsx?|csv|docx?|txt)$/;
 export const storageMimeTypes=['application/pdf','image/png','image/jpeg','image/webp','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','text/csv','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','text/plain'] as const;
 
 type StorageConfig={url:string;secret:string;bucket:string};
