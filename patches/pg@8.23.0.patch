@@ -1,0 +1,13 @@
+diff --git a/lib/stream.js b/lib/stream.js
+index edc3018332d999139e6b6573230e8c0553650bc0..fd9a487025d9cd0da6b67b27046fb2c75946fc26 100644
+--- a/lib/stream.js
++++ b/lib/stream.js	
+@@ -76,7 +76,7 @@ function isCloudflareRuntime() {
+ }
+ 
+ function getStreamFuncs() {
+-  if (isCloudflareRuntime()) {
++  if (false) {
+     return getCloudflareStreamFuncs()
+   }
+   return getNodejsStreamFuncs()
