@@ -4,11 +4,11 @@ import { database, transaction } from '../src/server/db';
 import { hashPassword } from '../src/modules/auth/crypto';
 import { emailSchema, passwordSchema } from '../src/modules/auth/validation';
 export const roleDefinitions = [
-  ['admin', 'Administrador', ['dashboard.read', 'team.read', 'settings.read', 'audit.read', 'crm.all', 'crm.own', 'crm.duplicate.override', 'crm.delete', 'crm.tags.manage', 'solar.catalog.manage', 'contracts.all', 'contracts.own', 'contracts.create', 'contracts.edit', 'contracts.cancel', 'contracts.payments.read', 'contracts.payments.manage', 'whatsapp.use', 'installation.read', 'postsales.read']],
-  ['manager', 'Gerente Comercial', ['dashboard.read', 'team.read', 'crm.all', 'crm.own', 'crm.duplicate.override', 'crm.delete', 'solar.catalog.manage', 'contracts.all', 'contracts.own', 'contracts.create', 'contracts.edit', 'contracts.cancel', 'contracts.payments.read', 'contracts.payments.manage', 'whatsapp.use']],
-  ['seller', 'Vendedor', ['dashboard.read', 'crm.own', 'contracts.own', 'contracts.create', 'contracts.edit', 'contracts.payments.read', 'whatsapp.use']],
-  ['support', 'Atendimento', ['dashboard.read', 'crm.own', 'contracts.own', 'contracts.payments.read', 'whatsapp.use']],
-  ['technician', 'Técnico', ['dashboard.read', 'installation.read']],
+  ['admin', 'Administrador', ['dashboard.read', 'team.read', 'settings.read', 'audit.read', 'crm.all', 'crm.own', 'crm.duplicate.override', 'crm.delete', 'crm.tags.manage', 'solar.catalog.manage', 'contracts.all', 'contracts.own', 'contracts.create', 'contracts.edit', 'contracts.cancel', 'contracts.payments.read', 'contracts.payments.manage', 'installations.read', 'installations.create', 'installations.edit', 'installations.manage', 'whatsapp.use', 'postsales.read']],
+  ['manager', 'Gerente Comercial', ['dashboard.read', 'team.read', 'crm.all', 'crm.own', 'crm.duplicate.override', 'crm.delete', 'solar.catalog.manage', 'contracts.all', 'contracts.own', 'contracts.create', 'contracts.edit', 'contracts.cancel', 'contracts.payments.read', 'contracts.payments.manage', 'installations.read', 'installations.create', 'installations.edit', 'installations.manage', 'whatsapp.use']],
+  ['seller', 'Vendedor', ['dashboard.read', 'crm.own', 'contracts.own', 'contracts.create', 'contracts.edit', 'contracts.payments.read', 'installations.read', 'installations.create', 'installations.edit', 'whatsapp.use']],
+  ['support', 'Atendimento', ['dashboard.read', 'crm.own', 'contracts.own', 'contracts.payments.read', 'installations.read', 'whatsapp.use']],
+  ['technician', 'Técnico', ['dashboard.read', 'installations.read', 'installations.edit', 'installations.manage']],
   ['postsales', 'Pós-venda', ['dashboard.read', 'postsales.read']],
 ] as const;
 export async function seed() {

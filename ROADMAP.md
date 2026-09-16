@@ -11,4 +11,4 @@
 - FASE 9 — Performance, segurança, testes, UX e mobile.
 - FASE 10 — Deploy, backup, monitoramento e documentação operacional.
 
-FASE 5 concluída. Não avançar para a FASE 6 sem nova solicitação. Cada etapa exige revisão de arquitetura, banco e dependências; testes, lint e build.
+FASE 5 concluída. A FASE 6.1 implementa a base de instalações; fotos, checklist, homologação e pós-venda permanecem para etapas posteriores. Cada etapa exige revisão de arquitetura, banco e dependências; testes, lint e build.

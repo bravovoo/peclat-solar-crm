@@ -12,6 +12,7 @@ import { createDocument,getDocument,getDocumentFile,listDocuments,sendDocumentEm
 import { MAX_PDF_BYTES } from '@/modules/documents/storage';
 import { smtpProvider } from '@/integrations/mail';
 import {contractAlerts,contractDashboard,contractOptions,getContractDetail,listContracts,registerPayment,saveContract,setContractStatus,updatePayment} from '@/modules/contracts/repository';
+import {getInstallationDetail,installationOptions,listInstallations,saveInstallation,setInstallationStatus} from '@/modules/installations/repository';
 type Context={params:Promise<{resource:string;segments?:string[]}>};
 const resources:Record<string,Kind>={leads:'lead',customers:'customer',companies:'company'};
 const respond=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
@@ -21,6 +22,8 @@ async function handle(request:Request,context:Context){
   if(segments.length>2)throw new AccessError(404,'Não encontrado.');
   const url=new URL(request.url);const query=Object.fromEntries(url.searchParams);const kind=resources[resource];
   if(request.method==='GET'){
+   if(resource==='installations'){if(action)throw new AccessError(404,'Não encontrado.');return respond(id?await getInstallationDetail(actor,id):await listInstallations(actor,query));}
+   if(resource==='installation-options'&&!id)return respond(await installationOptions(actor));
    if(resource==='contracts'){if(action)throw new AccessError(404,'Não encontrado.');return respond(id?await getContractDetail(actor,id):await listContracts(actor,query));}
    if(resource==='contract-dashboard'&&!id)return respond(await contractDashboard(actor));
    if(resource==='contract-alerts'&&!id)return respond(await contractAlerts(actor,query));
@@ -64,6 +67,12 @@ async function handle(request:Request,context:Context){
    if(resource==='dashboard')return respond(await dashboard(actor));
    if(['activities','notes','contacts','tasks'].includes(resource))return respond(await recordFeed(actor,uuid.parse(query.record_id),resource as 'activities'|'notes'|'contacts'|'tasks',z.coerce.number().int().min(1).max(100000).parse(query.page??1)));
   }else{
+   if(resource==='installations'){
+    const body=await readMutation(request);
+    if(request.method==='POST'&&!id)return respond(await saveInstallation(actor,body),201);
+    if(request.method==='PUT'&&id&&!action)return respond(await saveInstallation(actor,body,id));
+    if(request.method==='POST'&&id&&action==='status')return respond(await setInstallationStatus(actor,id,body));
+   }
    if(resource==='contracts'){
     const body=await readMutation(request);
     if(request.method==='POST'&&!id)return respond(await saveContract(actor,body),201);

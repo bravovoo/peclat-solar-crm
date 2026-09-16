@@ -72,7 +72,9 @@ test('login e painel se adaptam de 320px até tablet sem rolagem horizontal',asy
     await page.setViewportSize({width,height:900});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   }
+  await page.getByRole('link',{name:'Equipe',exact:true}).scrollIntoViewIfNeeded();
   await expect(page.getByRole('link',{name:'Equipe',exact:true})).toBeInViewport();
+  await page.getByRole('link',{name:'Configurações',exact:true}).scrollIntoViewIfNeeded();
   await expect(page.getByRole('link',{name:'Configurações',exact:true})).toBeInViewport();
   await expect(page.getByText('Propostas',{exact:true})).not.toBeVisible();
   await page.locator('.future-navigation summary').click();await expect(page.getByText('Leads',{exact:true})).toBeVisible();

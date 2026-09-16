@@ -18,6 +18,7 @@ import { createSolarSizing,getEnergyUnit,listEnergyUnits,listSolarSizings,saveBi
 import { getEquipment,getKit,listEquipment,listKits,listKitSelections,saveEquipment,saveKit,selectKitForSizing,setEquipmentStatus,setKitStatus } from '../src/modules/solar-catalog/repository';
 import {createDocument,getDocument,getDocumentFile,listDocuments,sendDocumentEmail,setDocumentSignature,setDocumentStatus,updateDocument} from '../src/modules/documents/repository';
 import {contractAlerts,contractDashboard,getContractDetail,listContracts,registerPayment,saveContract,setContractStatus,updatePayment} from '../src/modules/contracts/repository';
+import {getInstallationDetail,installationOptions,listInstallations,saveInstallation,setInstallationStatus} from '../src/modules/installations/repository';
 import {MailConfigurationError,smtpProvider,type DocumentMailProvider} from '../src/integrations/mail';
 let db:LocalPostgres;let admin:Actor;let seller:Actor;let otherSeller:Actor;let otherTenant:Actor;let lead:CommercialRecord;let customer:CommercialRecord;let tagId:string;
 const password='Senha exclusiva teste CRM';
@@ -290,4 +291,53 @@ test('contrato calcula itens, numeração, parcelas, pagamentos, escopo e docume
  await registerPayment(admin,created.id,{installment_id:first.id,amount:1100,paid_at:'2026-09-15T14:00:00-03:00',payment_method:'pix',transaction_reference:'PIX-002',notes:''});paid=await getContractDetail(admin,created.id);assert.equal(paid.installments[0].status,'paid');assert.equal(paid.payments.length,2);assert.ok((await contractDashboard(admin)).received_value>=1500);assert.ok(Array.isArray(await contractAlerts(admin)));
  let document=await createDocument(seller,{customer_id:customer.id,opportunity_id:null,contract_id:created.id,document_type:'contract',name:'Contrato assinado externamente',budget_value:21500,valid_until:'2026-12-31',notes:''},{name:'contrato.pdf',type:'application/pdf',bytes:Buffer.from('%PDF-1.4\ncontract\n%%EOF')});assert.equal(document.contract_id,created.id);assert.equal((await listDocuments(seller,{contract_id:created.id})).length,1);document=await setDocumentSignature(seller,document.id,{signature_status:'signed',signed_at:'2026-09-15T15:00:00-03:00',signed_by:'Cliente do teste',signature_notes:'Assinado presencialmente.',version:document.version});assert.equal(document.signature_status,'signed');assert.equal((await getDocument(seller,document.id)).history[0].action,'signature_changed');
  const sellerVersion=(await getContractDetail(seller,created.id)).contract.version;await assert.rejects(()=>setContractStatus(seller,created.id,{status:'cancelled',version:sellerVersion}),{status:403});const current=(await getContractDetail(admin,created.id)).contract;const cancelled=await setContractStatus(admin,created.id,{status:'cancelled',version:current.version});assert.equal(cancelled.status,'cancelled');
+});
+
+test('instalação nasce somente de contrato fechado, sem duplicação e com os itens vendidos',async()=>{
+ const opportunity=await saveOpportunity(seller,{title:'Oportunidade para instalação',customer_id:customer.id});
+ const contract=await saveContract(seller,{client_id:customer.id,opportunity_id:opportunity.id,title:'Contrato para instalação',items:[{description:'Kit fotovoltaico vendido',category:'manual',quantity:2,unit_value:1000,discount_value:0}],down_payment_value:2000,payment_method:'pix',installments_count:0});
+ const input={contract_id:contract.id,responsible_user_id:seller.userId,team_name:'Equipe solar',installation_address:'Rua das Flores, 123, Contagem - MG',planned_on:'2026-10-20',scheduled_on:'',started_on:'',completed_on:'',notes:'Acesso pela garagem'};
+ await assert.rejects(()=>saveInstallation(seller,input),{status:409});
+ const signed=await setContractStatus(seller,contract.id,{status:'signed',version:contract.version});assert.equal(signed.status,'signed');
+ const item=await saveInstallation(seller,input);assert.equal(item.contract_id,contract.id);assert.equal(item.client_id,customer.id);assert.equal(item.opportunity_id,opportunity.id);assert.equal(item.status,'awaiting_schedule');assert.equal(item.version,1);
+ await assert.rejects(()=>saveInstallation(seller,input),{status:409});
+ const detail=await getInstallationDetail(seller,item.id);assert.equal(detail.items[0].description,'Kit fotovoltaico vendido');assert.equal(detail.items[0].quantity,2);assert.equal(detail.history[0].action,'created');
+ assert.equal((await listInstallations(seller,{q:item.installation_number,contract_id:contract.id})).total,1);
+ assert.equal((await listInstallations(seller,{client_id:customer.id,status:'awaiting_schedule'})).items.some(row=>row.id===item.id),true);
+ assert.equal((await installationOptions(seller)).contracts.some(row=>row.id===contract.id),false);
+ const updated=await saveInstallation(seller,{...input,team_name:'Equipe técnica',scheduled_on:'2026-10-22',version:item.version},item.id);assert.equal(updated.version,2);assert.equal(updated.team_name,'Equipe técnica');
+ await assert.rejects(()=>saveInstallation(seller,{...input,version:item.version},item.id),{status:409});
+ const scheduled=await setInstallationStatus(seller,item.id,{status:'scheduled',version:updated.version});assert.equal(scheduled.status,'scheduled');
+ const progress=await setInstallationStatus(seller,item.id,{status:'in_progress',version:scheduled.version,started_on:'2026-10-22'});assert.equal(progress.status,'in_progress');
+ await assert.rejects(()=>setInstallationStatus(seller,item.id,{status:'completed',version:progress.version}),{status:403});
+ const completed=await setInstallationStatus(admin,item.id,{status:'completed',version:progress.version,completed_on:'2026-10-25'});assert.equal(completed.status,'completed');assert.equal(completed.completed_on,'2026-10-25');
+ await assert.rejects(()=>saveInstallation(seller,{...input,version:completed.version},item.id),{status:409});
+ const actions=(await getInstallationDetail(admin,item.id)).history.map(row=>row.action);assert.ok(actions.includes('schedule_changed'));assert.ok(actions.includes('status_changed'));assert.ok(actions.includes('completed'));
+ const activity=await recordFeed(seller,customer.id,'activities');assert.ok(activity.items.some(row=>row.action==='installation.completed'));
+ const opportunityActivity=await opportunityFeed(seller,opportunity.id,'activities') as {items:{action:string}[]};
+ assert.ok(opportunityActivity.items.some(row=>row.action==='installation.completed'));
+ await assert.rejects(()=>getInstallationDetail(otherSeller,item.id),{status:404});await assert.rejects(()=>getInstallationDetail(otherTenant,item.id),{status:404});
+ await assert.rejects(()=>saveInstallation(otherSeller,{...input,contract_id:contract.id}),{status:404});
+});
+
+test('técnico designado vê somente sua instalação e pode gerir o andamento e responsável',async()=>{
+ const created=await database().query("INSERT INTO users(email,name,password_hash) VALUES ('technician@crm.test','Técnico de teste',$1) RETURNING id",[await hashPassword(password)]);
+ const technicianId=created.rows[0].id as string;
+ await database().query("INSERT INTO memberships(organization_id,user_id,role_code) VALUES ($1,$2,'technician')",[admin.organizationId,technicianId]);
+ const technician=(await sessionActor(await login({organization:'peclat-solar',email:'technician@crm.test',password})))!;
+ const contract=await saveContract(admin,{client_id:customer.id,title:'Contrato para técnico',items:[{description:'Equipamento vendido',category:'manual',quantity:1,unit_value:1200}],down_payment_value:1200,payment_method:'pix',installments_count:0});
+ await setContractStatus(admin,contract.id,{status:'signed',version:contract.version});
+ const input={contract_id:contract.id,responsible_user_id:technicianId,installation_address:'Rua Técnica, 456, Contagem - MG',team_name:'Equipe T',planned_on:'',scheduled_on:'',started_on:'',completed_on:'',notes:''};
+ const installation=await saveInstallation(admin,input);
+ assert.equal((await getInstallationDetail(technician,installation.id)).installation.responsible_user_id,technicianId);
+ assert.equal((await listInstallations(technician,{status:'awaiting_schedule'})).items.some(row=>row.id===installation.id),true);
+ await assert.rejects(()=>saveInstallation(technician,input),{status:403});
+ const scheduled=await setInstallationStatus(technician,installation.id,{status:'scheduled',version:installation.version,scheduled_on:'2026-11-01'});
+ assert.equal(scheduled.status,'scheduled');
+ const reassigned=await saveInstallation(technician,{...input,responsible_user_id:seller.userId,scheduled_on:'2026-11-01',version:scheduled.version},installation.id);
+ assert.equal(reassigned.responsible_user_id,seller.userId);
+ await assert.rejects(()=>getInstallationDetail(technician,installation.id),{status:404});
+ assert.equal((await getInstallationDetail(seller,installation.id)).installation.id,installation.id);
+ const cancelled=await setInstallationStatus(admin,installation.id,{status:'cancelled',version:reassigned.version});
+ assert.equal(cancelled.status,'cancelled');assert.equal((await getInstallationDetail(admin,installation.id)).history[0].action,'cancelled');
 });
