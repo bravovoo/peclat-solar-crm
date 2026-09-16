@@ -1,4 +1,11 @@
+packages:
+  - '.'
+
 allowBuilds:
-  '@embedded-postgres/windows-x64': true
   esbuild: true
   unrs-resolver: true
+
+# Compatibilidade com o pnpm 10.11 usado no build da Cloudflare.
+onlyBuiltDependencies:
+  - esbuild
+  - unrs-resolver
