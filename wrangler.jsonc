@@ -5,7 +5,10 @@
   "compatibility_date": "2026-09-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "APP_URL": "https://peclat-solar-crm.peclatsolar.workers.dev"
+    "APP_URL": "https://peclat-solar-crm.peclatsolar.workers.dev",
+    "DOCUMENT_STORAGE_PROVIDER": "supabase",
+    "SUPABASE_URL": "https://jawnlkqhdywcsfmcjezk.supabase.co",
+    "SUPABASE_STORAGE_BUCKET": "peclat-crm-documents"
   },
   "assets": {
     "directory": ".open-next/assets",
