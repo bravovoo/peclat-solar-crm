@@ -37,6 +37,6 @@ export function failure(error: unknown) {
   if (error instanceof AccessError) return NextResponse.json({ error: error.message }, { status: error.status, headers: { 'Cache-Control': 'no-store' } });
   if(error instanceof MailConfigurationError)return NextResponse.json({error:'O envio por e-mail está indisponível porque o SMTP não foi configurado.'},{status:503,headers:{'Cache-Control':'no-store'}});
   if (error instanceof ZodError) return NextResponse.json({ error: error.issues[0]?.message ?? 'Dados inválidos.' }, { status: 400 });
-  console.error('request_failed', { type: error instanceof Error ? error.name : 'unknown', message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
+  console.error('request_failed', { type: error instanceof Error ? error.name : 'unknown' });
   return NextResponse.json({ error: 'Serviço indisponível no momento. Tente novamente.' }, { status: 503 });
 }

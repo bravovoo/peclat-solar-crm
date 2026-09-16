@@ -4,11 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  pg@8.23.0:
-    hash: b4e65a0501a6fefaa79307331e7a0c3619ad6b6d8610c1cdfa93fbf280fdd859
-    path: patches/pg@8.23.0.patch
-
 importers:
 
   .:
@@ -30,7 +25,7 @@ importers:
         version: 10.0.9
       pg:
         specifier: 8.23.0
-        version: 8.23.0(patch_hash=b4e65a0501a6fefaa79307331e7a0c3619ad6b6d8610c1cdfa93fbf280fdd859)
+        version: 8.23.0
       pg-cloudflare:
         specifier: 1.4.0
         version: 1.4.0
@@ -7154,9 +7149,9 @@ snapshots:
 
   pg-int8@1.0.1: {}
 
-  pg-pool@3.14.0(pg@8.23.0(patch_hash=b4e65a0501a6fefaa79307331e7a0c3619ad6b6d8610c1cdfa93fbf280fdd859)):
+  pg-pool@3.14.0(pg@8.23.0):
     dependencies:
-      pg: 8.23.0(patch_hash=b4e65a0501a6fefaa79307331e7a0c3619ad6b6d8610c1cdfa93fbf280fdd859)
+      pg: 8.23.0
 
   pg-protocol@1.16.0: {}
 
@@ -7168,10 +7163,10 @@ snapshots:
       postgres-date: 1.0.7
       postgres-interval: 1.2.0
 
-  pg@8.23.0(patch_hash=b4e65a0501a6fefaa79307331e7a0c3619ad6b6d8610c1cdfa93fbf280fdd859):
+  pg@8.23.0:
     dependencies:
       pg-connection-string: 2.14.0
-      pg-pool: 3.14.0(pg@8.23.0(patch_hash=b4e65a0501a6fefaa79307331e7a0c3619ad6b6d8610c1cdfa93fbf280fdd859))
+      pg-pool: 3.14.0(pg@8.23.0)
       pg-protocol: 1.16.0
       pg-types: 2.2.0
       pgpass: 1.0.5
