@@ -20,8 +20,16 @@ Campos: responsável, equipe, endereço, datas prevista/agendada/de início/de c
 
 `db/migrations/011_installations.sql` cria `installations` e `installation_history`, quatro permissões e seus vínculos aos perfis. As duas tabelas usam RLS habilitada, sem política aberta, e retiram acesso direto dos papéis da Data API, conforme a migration 010. O backend mantém conexão PostgreSQL via Hyperdrive na Cloudflare e `DATABASE_URL` local. A migration 010 não foi modificada.
 
-Antes de usar a Fase 6.1 em produção, aplique a migration 011 no Supabase com o processo de migração existente. Esta entrega não aplica a migration no banco remoto. Após a aplicação, confirme criação a partir de contrato assinado, edição, status, histórico e visibilidade por perfil.
+A migration 011 já foi aplicada no Supabase de produção. A Fase 6.1 está em uso.
 
-## Fora desta etapa
+## Fases 6.2 e 6.3 — execução, pendências e entrega
 
-Fotos, checklist técnico, assinatura do cliente, garantia, manutenção, pós-venda, WhatsApp e automações.
+`db/migrations/012_installation_execution.sql` cria `installation_checklist_items`, `installation_files`, `installation_issues`, `installation_completions` e `installation_deliveries`. O checklist possui 16 itens iniciais por instalação, inclusive as existentes, com progresso, observação, autor, horário e versão por item. O encerramento registra um snapshot do checklist e das pendências, observações finais e usuário. Checklist incompleto é mostrado ao responsável; pendências abertas exigem confirmação explícita. Pendências existentes continuam resolvíveis depois da conclusão. A entrega/aceite simples só pode ser registrada após conclusão, sem assinatura eletrônica.
+
+Fotos e documentos da instalação usam o mesmo provedor e bucket privado dos PDFs comerciais, mas têm metadados próprios em `installation_files`, pois `crm_documents` exige orçamento, validade e oportunidade. São permitidos PNG, JPEG, WEBP para fotos e PDF, PNG, JPEG, WEBP, XLSX, XLS, CSV, DOCX, DOC e TXT para documentos, até 10 MB. O servidor confere extensão, MIME e assinatura/conteúdo; downloads autenticados verificam SHA-256. A exclusão é lógica no banco, remove o objeto e gera histórico. Em produção, o bucket existente está privado e sem filtro de MIME ou limite próprios; o backend aplica essas restrições. `pnpm storage:setup` pode sincronizar lista e limite no bucket com credencial exclusiva do servidor.
+
+A página de instalação usa abas Resumo, Checklist, Fotos, Documentos, Pendências, Entrega e Histórico. Cliente e contrato exibem o progresso/status da instalação vinculada. As permissões existentes `installations.read`, `installations.edit` e `installations.manage` cobrem leitura, edição operacional e exclusão/conclusão/entrega; nenhuma permissão nova foi criada. As cinco tabelas novas têm RLS habilitada sem FORCE nem políticas públicas e têm privilégios da Data API revogados para PUBLIC, anon, authenticated e service_role. A conexão PostgreSQL privilegiada do backend continua pelo Hyperdrive.
+
+## Fora deste bloco
+
+Manutenção, garantias, chamados de pós-venda, WhatsApp, automações, notificações, assinatura eletrônica externa, portal do cliente, monitoramento de geração e Fase 7.

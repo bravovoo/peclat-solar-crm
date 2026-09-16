@@ -3,4 +3,4 @@ import {ensureSupabaseDocumentBucket} from '../src/modules/documents/supabase-st
 
 try{loadEnvFile('.env');}catch{throw new Error('Crie o .env antes de preparar o armazenamento.');}
 const bucket=await ensureSupabaseDocumentBucket();
-console.log(`Bucket privado configurado: ${bucket}. Limite: 10 MB. MIME: application/pdf.`);
+console.log(`Bucket privado configurado: ${bucket}. Limite: 10 MB. MIME: documentos e imagens da instalação.`);

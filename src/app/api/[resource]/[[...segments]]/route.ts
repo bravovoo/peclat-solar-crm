@@ -13,6 +13,8 @@ import { MAX_PDF_BYTES } from '@/modules/documents/storage';
 import { smtpProvider } from '@/integrations/mail';
 import {contractAlerts,contractDashboard,contractOptions,getContractDetail,listContracts,registerPayment,saveContract,setContractStatus,updatePayment} from '@/modules/contracts/repository';
 import {getInstallationDetail,installationOptions,listInstallations,saveInstallation,setInstallationStatus} from '@/modules/installations/repository';
+import {addInstallationFile,deleteInstallationFile,getInstallationFile,saveInstallationDelivery,saveInstallationIssue,updateChecklistItem} from '@/modules/installations/execution';
+import {MAX_INSTALLATION_FILE_BYTES} from '@/modules/installations/file-storage';
 type Context={params:Promise<{resource:string;segments?:string[]}>};
 const resources:Record<string,Kind>={leads:'lead',customers:'customer',companies:'company'};
 const respond=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
@@ -22,6 +24,11 @@ async function handle(request:Request,context:Context){
   if(segments.length>2)throw new AccessError(404,'Não encontrado.');
   const url=new URL(request.url);const query=Object.fromEntries(url.searchParams);const kind=resources[resource];
   if(request.method==='GET'){
+   if(resource==='installation-files'&&id&&action==='file'){
+    const {file,bytes}=await getInstallationFile(actor,id);const filename=file.original_filename.replace(/[^a-zA-Z0-9._-]/g,'_');
+    const disposition=file.kind==='photo'&&query.download!=='1'?'inline':'attachment';
+    return new NextResponse(new Uint8Array(bytes),{headers:{'Content-Type':file.mime_type,'Content-Length':String(bytes.length),'Content-Disposition':`${disposition}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(file.original_filename)}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+   }
    if(resource==='installations'){if(action)throw new AccessError(404,'Não encontrado.');return respond(id?await getInstallationDetail(actor,id):await listInstallations(actor,query));}
    if(resource==='installation-options'&&!id)return respond(await installationOptions(actor));
    if(resource==='contracts'){if(action)throw new AccessError(404,'Não encontrado.');return respond(id?await getContractDetail(actor,id):await listContracts(actor,query));}
@@ -67,11 +74,22 @@ async function handle(request:Request,context:Context){
    if(resource==='dashboard')return respond(await dashboard(actor));
    if(['activities','notes','contacts','tasks'].includes(resource))return respond(await recordFeed(actor,uuid.parse(query.record_id),resource as 'activities'|'notes'|'contacts'|'tasks',z.coerce.number().int().min(1).max(100000).parse(query.page??1)));
   }else{
+   if(resource==='installation-files'&&request.method==='POST'&&!id){
+    const form=await readMultipartMutation(request,MAX_INSTALLATION_FILE_BYTES+131072),file=form.get('file');
+    if(!(file instanceof File))throw new AccessError(400,'Selecione um arquivo.');
+    const metadata=Object.fromEntries(['installation_id','kind','name','description','category'].map(key=>[key,String(form.get(key)??'')]));
+    return respond(await addInstallationFile(actor,metadata,{name:file.name,type:file.type,bytes:new Uint8Array(await file.arrayBuffer())}),201);
+   }
+   if(resource==='installation-checklist'&&request.method==='PUT'&&id&&!action)return respond(await updateChecklistItem(actor,id,await readMutation(request)));
+   if(resource==='installation-issues'&&request.method==='POST'&&!id)return respond(await saveInstallationIssue(actor,await readMutation(request)),201);
+   if(resource==='installation-issues'&&request.method==='PUT'&&id&&!action)return respond(await saveInstallationIssue(actor,await readMutation(request),id));
+   if(resource==='installation-files'&&request.method==='DELETE'&&id&&!action){const body=z.object({version:z.number().int().positive()}).strict().parse(await readMutation(request));return respond(await deleteInstallationFile(actor,id,body.version));}
    if(resource==='installations'){
     const body=await readMutation(request);
     if(request.method==='POST'&&!id)return respond(await saveInstallation(actor,body),201);
     if(request.method==='PUT'&&id&&!action)return respond(await saveInstallation(actor,body,id));
     if(request.method==='POST'&&id&&action==='status')return respond(await setInstallationStatus(actor,id,body));
+    if(request.method==='POST'&&id&&action==='delivery')return respond(await saveInstallationDelivery(actor,id,body),201);
    }
    if(resource==='contracts'){
     const body=await readMutation(request);

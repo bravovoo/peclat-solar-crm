@@ -37,7 +37,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,11);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,12);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
   const key=Symbol.for('__cloudflare-context__');
@@ -73,7 +73,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,44);
+  assert.equal(tables.rowCount,49);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);

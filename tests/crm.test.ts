@@ -20,6 +20,8 @@ import {createDocument,getDocument,getDocumentFile,listDocuments,sendDocumentEma
 import {contractAlerts,contractDashboard,getContractDetail,listContracts,registerPayment,saveContract,setContractStatus,updatePayment} from '../src/modules/contracts/repository';
 import {getInstallationDetail,installationOptions,listInstallations,saveInstallation,setInstallationStatus} from '../src/modules/installations/repository';
 import {MailConfigurationError,smtpProvider,type DocumentMailProvider} from '../src/integrations/mail';
+import {addInstallationFile,deleteInstallationFile,getInstallationFile,saveInstallationDelivery,saveInstallationIssue,updateChecklistItem} from '../src/modules/installations/execution';
+import {validateInstallationFile} from '../src/modules/installations/file-storage';
 let db:LocalPostgres;let admin:Actor;let seller:Actor;let otherSeller:Actor;let otherTenant:Actor;let lead:CommercialRecord;let customer:CommercialRecord;let tagId:string;
 const password='Senha exclusiva teste CRM';
 function payload(r:CommercialRecord,changes:Record<string,unknown>={}){const fields=['name','person_type','document','phone','whatsapp','email','postal_code','address','number','complement','neighborhood','city','state','owner_id','source','campaign','priority','temperature','stage','potential_value','expected_close','observations','average_consumption','utility','property_type','roof_type','consumer_units','battery_interest','financing_interest','trade_name','state_registration','website','version'];return {...Object.fromEntries(Object.entries(r).filter(([key])=>fields.includes(key))),tag_ids:r.tags.map(t=>t.id),...changes};}
@@ -340,4 +342,42 @@ test('técnico designado vê somente sua instalação e pode gerir o andamento e
  assert.equal((await getInstallationDetail(seller,installation.id)).installation.id,installation.id);
  const cancelled=await setInstallationStatus(admin,installation.id,{status:'cancelled',version:reassigned.version});
  assert.equal(cancelled.status,'cancelled');assert.equal((await getInstallationDetail(admin,installation.id)).history[0].action,'cancelled');
+});
+
+test('checklist, fotos, documentos, pendências, conclusão e aceite preservam autorização e histórico',async()=>{
+ const contract=await saveContract(seller,{client_id:customer.id,title:'Execução Fase 6.2',items:[{description:'Kit de execução',category:'manual',quantity:1,unit_value:1500}],down_payment_value:1500,payment_method:'pix',installments_count:0});
+ await setContractStatus(seller,contract.id,{status:'signed',version:contract.version});
+ let installation=await saveInstallation(seller,{contract_id:contract.id,responsible_user_id:seller.userId,installation_address:'Rua da Execução, 456, Contagem - MG',team_name:'Equipe A',planned_on:'',scheduled_on:'',started_on:'',completed_on:'',notes:''});
+ let detail=await getInstallationDetail(seller,installation.id);assert.equal(detail.checklist.length,16);assert.equal(detail.checklist.filter(row=>row.checked).length,0);
+ const first=detail.checklist[0];await assert.rejects(()=>updateChecklistItem(otherSeller,first.id,{checked:true,notes:'Conferido',version:first.version}),{status:404});
+ await updateChecklistItem(seller,first.id,{checked:true,notes:'Conferido com a equipe.',version:first.version});
+ detail=await getInstallationDetail(seller,installation.id);assert.equal(detail.checklist[0].checked_by,seller.userId);assert.ok(detail.checklist[0].checked_at);assert.equal(detail.checklist.filter(row=>row.checked).length,1);
+ await assert.rejects(()=>updateChecklistItem(seller,first.id,{checked:false,notes:'',version:first.version}),{status:409});
+ const image=Buffer.from('89504e470d0a1a0a0000000049454e44ae426082','hex');
+ assert.throws(()=>validateInstallationFile('falsa.png','image/png',Buffer.from('not an image'),'photo'),{status:415});
+ assert.throws(()=>validateInstallationFile('foto.png','image/jpeg',image,'photo'),{status:415});
+ const photo=await addInstallationFile(seller,{installation_id:installation.id,kind:'photo',name:'Telhado antes',description:'Vista inicial',category:'before'},{name:'telhado.png',type:'image/png',bytes:image});
+ const loaded=await getInstallationFile(seller,photo.id);assert.deepEqual(Buffer.from(loaded.bytes),image);await assert.rejects(()=>getInstallationFile(otherSeller,photo.id),{status:404});
+ const document=await addInstallationFile(seller,{installation_id:installation.id,kind:'document',name:'Relatório técnico',description:'',category:'installation'},{name:'relatorio.txt',type:'text/plain',bytes:Buffer.from('Relatório técnico de instalação')});
+ assert.equal((await getInstallationFile(seller,document.id)).file.mime_type,'text/plain');
+ await assert.rejects(()=>deleteInstallationFile(seller,photo.id,photo.version),{status:403});
+ await deleteInstallationFile(admin,photo.id,photo.version);await assert.rejects(()=>getInstallationFile(admin,photo.id),{status:404});
+ const issueInput={installation_id:installation.id,title:'Acesso ao telhado',description:'Aguardar liberação',status:'open',priority:'high',responsible_user_id:seller.userId,due_on:'2026-10-20',resolution_notes:''};
+ const issue=await saveInstallationIssue(seller,issueInput);assert.equal(issue.status,'open');
+ const resolvedCandidate=await saveInstallationIssue(seller,{...issueInput,title:'Teste elétrico concluído'});
+ const resolved=await saveInstallationIssue(seller,{...issueInput,title:'Teste elétrico concluído',status:'resolved',resolution_notes:'Medições aprovadas.',version:resolvedCandidate.version},resolvedCandidate.id);
+ assert.equal(resolved.status,'resolved');assert.ok(resolved.resolved_at);
+ await assert.rejects(()=>saveInstallationIssue(otherSeller,issueInput,issue.id),{status:404});
+ await assert.rejects(()=>saveInstallationIssue(seller,{...issueInput,status:'resolved',version:issue.version},issue.id),{status:400});
+ await assert.rejects(()=>saveInstallationDelivery(admin,installation.id,{delivered_at:'2026-10-25T12:00:00-03:00',delivered_by:seller.userId,recipient_name:'Cliente Teste',confirmed:true,notes:''}),{status:409});
+ installation=await setInstallationStatus(seller,installation.id,{status:'scheduled',version:installation.version,scheduled_on:'2026-10-22'});
+ installation=await setInstallationStatus(seller,installation.id,{status:'in_progress',version:installation.version,started_on:'2026-10-22'});
+ await assert.rejects(()=>setInstallationStatus(admin,installation.id,{status:'completed',version:installation.version,completed_on:'2026-10-25'}),{status:409});
+ installation=await setInstallationStatus(admin,installation.id,{status:'completed',version:installation.version,completed_on:'2026-10-25',confirm_open_issues:true,final_notes:'Concluída com acesso pendente.'});
+ detail=await getInstallationDetail(admin,installation.id);assert.equal(detail.completion?.had_open_issues,true);assert.equal((detail.completion?.checklist_snapshot as unknown[]).length,16);assert.equal((detail.completion?.issues_snapshot as unknown[]).length,2);
+ assert.equal(detail.files.length,1);assert.equal(detail.issues.length,2);assert.ok(detail.history.some(row=>row.action==='photo_added'));assert.ok(detail.history.some(row=>row.action==='photo_removed'));assert.ok(detail.history.some(row=>row.action==='issue_created'));assert.ok(detail.history.some(row=>row.action==='issue_resolved'));
+ await assert.rejects(()=>updateChecklistItem(seller,first.id,{checked:false,notes:'',version:detail.checklist[0].version}),{status:409});
+ const delivery=await saveInstallationDelivery(admin,installation.id,{delivered_at:'2026-10-26T14:00:00-03:00',delivered_by:seller.userId,recipient_name:'Cliente Teste',confirmed:true,notes:'Orientações entregues.'});assert.equal(delivery.confirmed,true);
+ await assert.rejects(()=>saveInstallationDelivery(otherTenant,installation.id,{delivered_at:'2026-10-26T14:00:00-03:00',delivered_by:seller.userId,recipient_name:'Outro',confirmed:true,notes:''}),{status:404});
+ assert.equal((await getInstallationDetail(admin,installation.id)).delivery?.recipient_name,'Cliente Teste');
 });

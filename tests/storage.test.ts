@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {mkdtemp,readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-import {ensureSupabaseDocumentBucket} from '../src/modules/documents/supabase-storage';
+import {ensureSupabaseDocumentBucket,storageMimeTypes} from '../src/modules/documents/supabase-storage';
 import {loadPdf,removePdf,storePdf,validatePdf} from '../src/modules/documents/storage';
 
 const originalFetch=globalThis.fetch;
@@ -30,9 +30,9 @@ test('download mantém verificação SHA-256 e autorização não aceita chave p
  delete process.env.SUPABASE_SECRET_KEY;await assert.rejects(()=>storePdf(key,pdf),{status:503,message:'O armazenamento de documentos não foi configurado.'});
 });
 
-test('bucket é criado privado com limite de 10 MB e somente PDF',async()=>{
+test('bucket é criado privado com limite de 10 MB e formatos de instalação',async()=>{
  const calls:{url:string;method:string;body:unknown}[]=[];globalThis.fetch=async(input,init)=>{calls.push({url:String(input),method:init?.method??'GET',body:init?.body?JSON.parse(String(init.body)):null});return calls.length===1?new Response('{}',{status:404}):new Response('{}',{status:200});};
- assert.equal(await ensureSupabaseDocumentBucket(),'peclat-crm-documents');assert.equal(calls[1].method,'POST');assert.deepEqual(calls[1].body,{id:'peclat-crm-documents',name:'peclat-crm-documents',public:false,file_size_limit:10485760,allowed_mime_types:['application/pdf']});
+ assert.equal(await ensureSupabaseDocumentBucket(),'peclat-crm-documents');assert.equal(calls[1].method,'POST');assert.deepEqual(calls[1].body,{id:'peclat-crm-documents',name:'peclat-crm-documents',public:false,file_size_limit:10485760,allowed_mime_types:[...storageMimeTypes]});
 });
 
 test('validação de PDF continua limitada a 10 MB',()=>{

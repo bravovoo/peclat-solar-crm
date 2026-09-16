@@ -3,6 +3,8 @@ import {AccessError} from '@/modules/auth/policy';
 const DEFAULT_BUCKET='peclat-crm-documents';
 const PDF_LIMIT=10*1024*1024;
 const keyPattern=/^[0-9a-f-]{36}\/[0-9a-f-]{36}\.pdf$/;
+const installationKeyPattern=/^[0-9a-f-]{36}\/installations\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(?:png|jpe?g|webp|pdf|xlsx?|csv|docx?|txt)$/;
+export const storageMimeTypes=['application/pdf','image/png','image/jpeg','image/webp','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','text/csv','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','text/plain'] as const;
 
 type StorageConfig={url:string;secret:string;bucket:string};
 
@@ -18,7 +20,7 @@ function configuration():StorageConfig{
 }
 
 function storageKey(key:string){
- if(!keyPattern.test(key))throw new AccessError(500,'Referência de arquivo inválida.');
+ if(!keyPattern.test(key)&&!installationKeyPattern.test(key))throw new AccessError(500,'Referência de arquivo inválida.');
  return key.split('/').map(encodeURIComponent).join('/');
 }
 
@@ -34,14 +36,22 @@ async function storageError(response:Response,operation:string):Promise<AccessEr
 }
 
 export async function uploadSupabasePdf(key:string,bytes:Uint8Array){
+ return uploadSupabaseObject(key,bytes,'application/pdf');
+}
+
+export async function uploadSupabaseObject(key:string,bytes:Uint8Array,mimeType:string){
  const config=configuration(),path=storageKey(key);
  const response=await fetch(`${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${path}`,{
-  method:'POST',headers:{...headers(config),'Content-Type':'application/pdf','Cache-Control':'no-store','x-upsert':'false'},body:Buffer.from(bytes),cache:'no-store'
+  method:'POST',headers:{...headers(config),'Content-Type':mimeType,'Cache-Control':'no-store','x-upsert':'false'},body:Buffer.from(bytes),cache:'no-store'
  });
  if(!response.ok)throw await storageError(response,'armazenar');
 }
 
 export async function downloadSupabasePdf(key:string){
+ return downloadSupabaseObject(key);
+}
+
+export async function downloadSupabaseObject(key:string){
  const config=configuration(),path=storageKey(key);
  const response=await fetch(`${config.url}/storage/v1/object/authenticated/${encodeURIComponent(config.bucket)}/${path}`,{headers:headers(config),cache:'no-store'});
  if(!response.ok)throw await storageError(response,'carregar');
@@ -49,6 +59,10 @@ export async function downloadSupabasePdf(key:string){
 }
 
 export async function removeSupabasePdf(key:string){
+ return removeSupabaseObject(key);
+}
+
+export async function removeSupabaseObject(key:string){
  const config=configuration();storageKey(key);
  const response=await fetch(`${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}`,{
   method:'DELETE',headers:headers(config,true),body:JSON.stringify({prefixes:[key]}),cache:'no-store'
@@ -58,7 +72,7 @@ export async function removeSupabasePdf(key:string){
 
 export async function ensureSupabaseDocumentBucket(){
  const config=configuration();
- const settings={public:false,file_size_limit:PDF_LIMIT,allowed_mime_types:['application/pdf']};
+ const settings={public:false,file_size_limit:PDF_LIMIT,allowed_mime_types:[...storageMimeTypes]};
  const bucketUrl=`${config.url}/storage/v1/bucket/${encodeURIComponent(config.bucket)}`;
  const current=await fetch(bucketUrl,{headers:headers(config),cache:'no-store'});
  if(current.status===404){const created=await fetch(`${config.url}/storage/v1/bucket`,{method:'POST',headers:headers(config,true),body:JSON.stringify({id:config.bucket,name:config.bucket,...settings}),cache:'no-store'});if(!created.ok)throw await storageError(created,'criar');return config.bucket;}
