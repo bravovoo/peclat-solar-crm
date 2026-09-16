@@ -5,7 +5,7 @@
   "compatibility_date": "2026-09-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "APP_URL": "https://peclat-solar-crm.bravoadm.workers.dev"
+    "APP_URL": "https://app.peclatsolar.com"
   },
   "assets": {
     "directory": ".open-next/assets",
