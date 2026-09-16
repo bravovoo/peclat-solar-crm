@@ -20,6 +20,7 @@ before(async()=>{
   await server.initialise();await server.start();await server.createDatabase('peclat_test');
   process.env.DATABASE_URL=`postgresql://test_user:test_db_password@127.0.0.1:${port}/peclat_test`;
   process.env.SEED_ADMIN_EMAIL='admin@test.local';process.env.SEED_ADMIN_PASSWORD=password;
+  await database().query('CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS');
   await migrate();await seed();
   orgA=(await database().query("SELECT id FROM organizations WHERE slug='peclat-solar'")).rows[0].id;
   orgB=(await database().query("INSERT INTO organizations(slug,name) VALUES ('outra-empresa','Outra empresa') RETURNING id")).rows[0].id;
@@ -36,7 +37,14 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,9);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,10);
+});
+test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
+  const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
+  assert.equal(tables.rowCount,42);
+  assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
+  assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
+  assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
 });
 test('login rejeita tenant alheio, credenciais inválidas e token forjado',async()=>{
   await assert.rejects(()=>login({organization:'outra-empresa',email:'admin@test.local',password}),{status:401});

@@ -6,10 +6,13 @@
   "engines": {
     "node": ">=22.12"
   },
-  "packageManager": "pnpm@11.19.0",
+  "packageManager": "pnpm@10.11.1",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
+    "cloudflare:build": "opennextjs-cloudflare build",
+    "cloudflare:deploy": "opennextjs-cloudflare deploy -- --keep-vars",
+    "deploy": "pnpm run cloudflare:build && pnpm run cloudflare:deploy",
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
@@ -28,6 +31,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "5.9.1",
+    "@opennextjs/cloudflare": "1.20.6",
     "lucide-react": "1.45.0",
     "next": "16.3.5",
     "nodemailer": "10.0.9",
@@ -49,6 +53,7 @@
     "eslint-config-next": "16.3.5",
     "tailwindcss": "4.3.3",
     "tsx": "4.23.13",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "wrangler": "4.131.0"
   }
 }
