@@ -29,7 +29,7 @@ test('pós-venda registra garantia, chamado, acionamento, manutenção, anexo e 
  await expect(page.getByRole('heading',{name:'Pós-venda'})).toBeVisible();
  await page.getByRole('button',{name:'Nova garantia'}).click();
  const warrantyDialog=page.getByRole('dialog');
- await warrantyDialog.getByLabel('Instalação',{exact:true}).selectOption(installation.id);
+ await expect(warrantyDialog.getByRole('combobox',{name:'Instalação',exact:true})).toHaveValue(installation.id);
  await warrantyDialog.getByLabel('Descrição').fill('Garantia do módulo E2E');
  await warrantyDialog.getByLabel('Fabricante').fill('Fabricante E2E');
  await warrantyDialog.getByLabel('Início da garantia').fill('2026-01-10');
@@ -40,10 +40,10 @@ test('pós-venda registra garantia, chamado, acionamento, manutenção, anexo e 
  await page.goto('/pos-venda');
  await page.getByRole('button',{name:'Novo chamado'}).click();
  const ticketDialog=page.getByRole('dialog');
- await ticketDialog.getByLabel('Cliente').selectOption(customer.id);
- await ticketDialog.getByLabel('Contrato').selectOption(contract.id);
- await ticketDialog.getByLabel('Instalação',{exact:true}).selectOption(installation.id);
- await ticketDialog.getByLabel('Garantia').selectOption({label:'Garantia do módulo E2E'});
+ await ticketDialog.getByRole('combobox',{name:'Cliente',exact:true}).selectOption(customer.id);
+ await ticketDialog.getByRole('combobox',{name:'Contrato',exact:true}).selectOption(contract.id);
+ await ticketDialog.getByRole('combobox',{name:'Instalação',exact:true}).selectOption(installation.id);
+ await ticketDialog.getByRole('combobox',{name:'Garantia',exact:true}).selectOption({label:'Garantia do módulo E2E'});
  await ticketDialog.getByLabel('Título').fill('Falha de geração E2E');
  await ticketDialog.getByLabel('Descrição').fill('Cliente relatou interrupção de geração.');
  await ticketDialog.getByLabel('Prioridade').selectOption('high');
@@ -67,7 +67,7 @@ test('pós-venda registra garantia, chamado, acionamento, manutenção, anexo e 
  await claimDialog.getByLabel('Fornecedor ou fabricante').fill('Fabricante E2E');
  await claimDialog.getByLabel('Protocolo').fill('E2E-001');
  await claimDialog.getByRole('button',{name:'Acionar garantia'}).click();
- await expect(page.getByText('E2E-001',{exact:true})).toBeVisible();
+ await expect(page.getByText(/E2E-001/)).toBeVisible();
 
  const filePanel=page.locator('section').filter({has:page.getByRole('heading',{name:'Fotos e documentos'})});
  await filePanel.getByLabel('Nome').fill('Relatório técnico E2E');
@@ -84,9 +84,9 @@ test('pós-venda registra garantia, chamado, acionamento, manutenção, anexo e 
  await page.goto('/pos-venda');
  await page.getByRole('button',{name:'Nova manutenção'}).click();
  const maintenanceDialog=page.getByRole('dialog');
- await maintenanceDialog.getByLabel('Instalação',{exact:true}).selectOption(installation.id);
- await maintenanceDialog.getByLabel('Chamado').selectOption(ticketId);
- await maintenanceDialog.getByLabel('Garantia').selectOption({label:'Garantia do módulo E2E'});
+ await expect(maintenanceDialog.getByRole('combobox',{name:'Instalação',exact:true})).toHaveValue(installation.id);
+ await maintenanceDialog.getByRole('combobox',{name:'Chamado',exact:true}).selectOption(ticketId);
+ await maintenanceDialog.getByRole('combobox',{name:'Garantia',exact:true}).selectOption({label:'Garantia do módulo E2E'});
  await maintenanceDialog.getByLabel('Motivo').fill('Substituição de módulo E2E');
  await maintenanceDialog.getByLabel('Descrição').fill('Troca coberta pela garantia.');
  await maintenanceDialog.getByRole('button',{name:'Solicitar manutenção'}).click();
@@ -97,8 +97,8 @@ test('pós-venda registra garantia, chamado, acionamento, manutenção, anexo e 
  await expect(page.getByText('Trocar módulo garantido',{exact:true})).toBeVisible();
 
  await page.goto(`/clientes/${customer.id}?tab=post-sales`);
- await expect(page.getByText('Garantia do módulo E2E',{exact:true})).toBeVisible();
- await expect(page.getByText(/POS-\d{4}-\d{6}/)).toBeVisible();
+ await expect(page.getByRole('link',{name:/Garantia do módulo E2E/})).toBeVisible();
+ await expect(page.getByRole('link',{name:/POS-\d{4}-\d{6}/})).toBeVisible();
  await page.goto(`/contratos/${contract.id}`);
  await expect(page.getByRole('heading',{name:'Garantias, chamados e manutenção'})).toBeVisible();
  await page.goto(`/instalacoes/${installation.id}`);
