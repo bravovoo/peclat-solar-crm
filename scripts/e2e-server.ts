@@ -22,6 +22,8 @@ await migrate();await seed();
 const hash=await hashPassword('Peclat teste seguro 2026');
 const user=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('seller@e2e.local','Vendedor de teste',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'seller' FROM organizations WHERE slug='peclat-solar'",[user.id]);
+const commercialManager=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('manager@e2e.local','Gerente comercial de teste',$1) RETURNING id",[hash])).rows[0];
+await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'manager' FROM organizations WHERE slug='peclat-solar'",[commercialManager.id]);
 const documentUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('documents@e2e.local','Consultor de documentos',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'seller' FROM organizations WHERE slug='peclat-solar'",[documentUser.id]);
 const contractUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('contracts@e2e.local','Gestor de contratos',$1) RETURNING id",[hash])).rows[0];

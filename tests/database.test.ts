@@ -11,6 +11,7 @@ import { seed } from '../scripts/seed';
 import { login, sessionActor, logout, requestRecovery, resetPassword, consumeRateLimit } from '../src/modules/auth/service';
 import { hashPassword, tokenHash } from '../src/modules/auth/crypto';
 import { teamMembers, recentAudit } from '../src/modules/core/repository';
+import { changeCommercialTeamMember, commercialTeamOverview, saveCommercialTeam } from '../src/modules/commercial-teams/repository';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
 const password='Teste exclusivo 2026!';
@@ -38,7 +39,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,13);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,14);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
   const key=Symbol.for('__cloudflare-context__');
@@ -86,7 +87,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,58);
+  assert.equal(tables.rowCount,61);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
@@ -103,6 +104,57 @@ test('permissões efetivas e consultas não vazam membros ou auditoria de outro 
   await database().query("INSERT INTO audit_logs(organization_id,action) VALUES ($1,'other.private')",[orgB]);
   assert.ok((await recentAudit(admin)).every(e=>e.action!=='other.private'));
   await assert.rejects(()=>recentAudit(seller),{status:403});
+});
+test('equipes comerciais usam membros existentes, respeitam organização e preservam histórico',async()=>{
+  const hash=await hashPassword(password);
+  const ids:string[]=[];
+  for(const [email,role] of [['manager1@test.local','manager'],['manager2@test.local','manager'],['seller2@test.local','seller']]){
+    const user=(await database().query('INSERT INTO users(email,name,password_hash) VALUES ($1,$1,$2) RETURNING id',[email,hash])).rows[0];
+    await database().query('INSERT INTO memberships(organization_id,user_id,role_code) VALUES ($1,$2,$3)',[orgA,user.id,role]);
+    ids.push(user.id);
+  }
+  const [managerId,secondManagerId,secondSellerId]=ids;
+  const manager=(await sessionActor(await login({organization:'peclat-solar',email:'manager1@test.local',password})))!;
+  const seller=(await sessionActor(sellerToken))!;
+  const outsider=(await sessionActor(await login({organization:'outra-empresa',email:'outsider@test.local',password})))!;
+  assert.ok(manager.permissions.includes('commercial_team.manage'));
+  assert.ok(seller.permissions.includes('commercial_team.read'));
+  await assert.rejects(()=>saveCommercialTeam(seller,{name:'Equipe Florianópolis',manager_user_id:managerId}),{status:403});
+  await assert.rejects(()=>saveCommercialTeam(admin,{name:'Equipe inválida',manager_user_id:seller.userId}),{status:400});
+  const teamId=await saveCommercialTeam(manager,{name:'Equipe Florianópolis',description:'Operação regional',manager_user_id:managerId,active:true});
+  await assert.rejects(()=>saveCommercialTeam(admin,{name:'equipe florianópolis',manager_user_id:managerId,active:true}),{status:409});
+  await changeCommercialTeamMember(manager,teamId,{user_id:seller.userId,action:'add'});
+  await assert.rejects(()=>changeCommercialTeamMember(manager,teamId,{user_id:seller.userId,action:'add'}),{status:409});
+  await assert.rejects(()=>changeCommercialTeamMember(outsider,teamId,{user_id:seller.userId,action:'remove'}),{status:404});
+  const lead=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name) VALUES ($1,'lead',$2,'Lead da equipe') RETURNING id",[orgA,seller.userId])).rows[0].id;
+  await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name) VALUES ($1,'customer',$2,'Cliente da equipe')",[orgA,seller.userId]);
+  await database().query("INSERT INTO crm_opportunities(organization_id,title,lead_id,owner_id) VALUES ($1,'Projeto da equipe',$2,$3)",[orgA,lead,seller.userId]);
+  await database().query("INSERT INTO crm_tasks(organization_id,record_id,owner_id,title,due_at,due_date) VALUES ($1,$2,$3,'Ligar para cliente',now()+interval '1 day',current_date+1)",[orgA,lead,seller.userId]);
+  const own=await commercialTeamOverview(seller);
+  assert.equal(own.teams.length,1);assert.deepEqual(own.members.map(member=>member.id),[seller.userId]);
+  assert.deepEqual([own.members[0].leads,own.members[0].customers,own.members[0].opportunities_open,own.members[0].tasks_open],[1,1,1,1]);
+  assert.equal((await commercialTeamOverview(outsider)).teams.length,0);
+  const first=(await commercialTeamOverview(admin)).teams.find(team=>team.id===teamId)!;
+  await assert.rejects(()=>saveCommercialTeam(admin,{name:first.name,description:'',manager_user_id:managerId,active:true,version:first.version+1},teamId),{status:409});
+  await saveCommercialTeam(admin,{name:first.name,description:'Nova descrição',manager_user_id:secondManagerId,active:false,version:first.version},teamId);
+  await assert.rejects(()=>changeCommercialTeamMember(admin,teamId,{user_id:secondSellerId,action:'add'}),{status:409});
+  await changeCommercialTeamMember(admin,teamId,{user_id:seller.userId,action:'remove'});
+  await database().query('UPDATE users SET active=false WHERE id=$1',[secondSellerId]);
+  const inactive=(await commercialTeamOverview(admin)).members.find(member=>member.id===secondSellerId)!;
+  assert.equal(inactive.active,false);
+  await database().query('UPDATE users SET active=true WHERE id=$1',[secondSellerId]);
+  const updated=(await commercialTeamOverview(admin)).teams.find(team=>team.id===teamId)!;
+  await saveCommercialTeam(admin,{name:updated.name,description:updated.description,manager_user_id:secondManagerId,active:true,version:updated.version},teamId);
+  await database().query('UPDATE users SET active=false WHERE id=$1',[secondSellerId]);
+  await assert.rejects(()=>changeCommercialTeamMember(admin,teamId,{user_id:secondSellerId,action:'add'}),{status:400});
+  await database().query('UPDATE users SET active=true WHERE id=$1',[secondSellerId]);
+  await changeCommercialTeamMember(admin,teamId,{user_id:secondSellerId,action:'add'});
+  const final=await commercialTeamOverview(admin);
+  assert.equal(final.teams.find(team=>team.id===teamId)?.member_count,1);
+  assert.ok(final.history.some(event=>event.action==='manager_changed'));
+  assert.ok(final.history.some(event=>event.action==='member_removed'));
+  assert.ok(final.history.some(event=>event.action==='reactivated'));
+  assert.equal((await database().query('SELECT count(*)::int n FROM commercial_team_members WHERE organization_id=$1 AND user_id=$2',[orgA,secondSellerId])).rows[0].n,1);
 });
 test('chave composta rejeita sessão com usuário de outra organização',async()=>{
   await assert.rejects(()=>database().query("INSERT INTO sessions(token_hash,user_id,organization_id,expires_at) VALUES ('forged',$1,$2,now()+interval '1 hour')",[admin.userId,orgB]),{code:'23503'});

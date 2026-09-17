@@ -1,0 +1,13 @@
+# FASE 7.1 — Equipe comercial e vendedores
+
+O vendedor continua sendo um usuário de `users` com um `membership` da organização e papel `seller`. Os papéis `admin` e `manager` existentes representam administrador e gerente comercial; nenhuma credencial ou cadastro paralelo foi criado. Os campos `owner_id` em leads, clientes, empresas, oportunidades e tarefas, e `responsible_user_id` em contratos, continuam como fonte dos responsáveis. As opções existentes de responsável já filtram organização, usuário e vínculo ativos e permissões comerciais.
+
+`db/migrations/014_commercial_teams.sql` cria `commercial_teams`, `commercial_team_members` e `commercial_team_history`. Equipes têm nome, descrição, gerente, estado, versão e timestamps. O gerente precisa ser um membro ativo com papel `manager`; o vendedor precisa ser um membro ativo com papel `seller`. A chave primária `(organization_id,user_id)` em `commercial_team_members` limita cada vendedor a uma equipe por organização. Para transferi-lo, remova a associação anterior e adicione à nova equipe. Desativar equipe preserva a associação e o histórico; a equipe não aceita novos membros enquanto inativa.
+
+A página `/equipe` exibe equipes, gerente, membros, estado e indicadores operacionais por responsável. Administrador e gerente podem criar e editar equipes, definir o gerente, adicionar/remover vendedores e desativar/reativar. O vendedor vê somente seu perfil e a equipe a que pertence. A página não cria usuários, altera papéis ou redistribui registros de um usuário desativado. Alterações relevantes entram em `commercial_team_history` e `audit_logs`; edições de equipe usam versão para detectar conflito.
+
+As permissões novas são `commercial_team.read` para administrador, gerente e vendedor, e `commercial_team.manage` para administrador e gerente. As três tabelas têm RLS habilitada sem `FORCE` ou políticas públicas, com privilégios diretos revogados de `PUBLIC`, `anon`, `authenticated` e `service_role`. O backend segue usando PostgreSQL privilegiado via Hyperdrive.
+
+Os escopos atuais `crm.all`/`crm.own` e `contracts.all`/`contracts.own` não foram alterados. Hoje o gerente comercial tem acesso a toda a organização. Aplicar “gerente vê somente sua equipe” exigirá mudanças coordenadas nas consultas de registros, oportunidades, tarefas, contratos, indicadores, pesquisa e validação de responsáveis. Essa mudança de autorização fica para a Fase 7.2, com testes de acesso cruzado, para não causar perdas de visibilidade ou lacunas de autorização nas fases já em produção.
+
+Antes de disponibilizar a interface em produção, aplique a migration 014. O comando de migração registra nome e checksum em `schema_migrations`; não altera migrations 001–013.

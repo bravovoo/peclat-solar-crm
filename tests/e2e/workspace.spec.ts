@@ -5,10 +5,11 @@ test('login, navegação, sessão protegida e logout em produção',async({page,
   await page.getByLabel('E-mail profissional').fill('admin@e2e.local');await page.getByLabel('Senha',{exact:true}).fill('errada');
   await page.getByRole('button',{name:'Entrar na plataforma'}).click();await expect(page.getByRole('alert').filter({hasText:'inválidos'})).toBeVisible();
   await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
   const session=(await context.cookies()).find(c=>c.name==='peclat_session');expect(session?.httpOnly).toBe(true);expect(session?.secure).toBe(true);expect(session?.sameSite).toBe('Lax');
   await page.screenshot({path:'test-results/dashboard-desktop.png',fullPage:true});
-  await page.getByRole('link',{name:'Equipe',exact:true}).click();await expect(page.getByRole('cell',{name:'admin@e2e.local'})).toBeVisible();
+  await page.getByRole('link',{name:'Equipe comercial',exact:true}).click();await expect(page.getByText('admin@e2e.local')).toBeVisible();
   await page.getByRole('link',{name:'Configurações',exact:true}).click();await expect(page.getByText('NÃO CONECTADO')).toBeVisible();
   await page.getByRole('button',{name:'Sair da conta'}).click();await expect(page).toHaveURL(/\/login$/);
   expect((await context.request.get('/api/me')).status()).toBe(401);
@@ -21,14 +22,17 @@ test('API rejeita CSRF, JSON inválido, excesso de tamanho e acesso anônimo',as
 });
 test('vendedor não acessa dados da equipe nem configurações',async({page,context})=>{
   await page.goto('/login');await page.getByLabel('E-mail profissional').fill('seller@e2e.local');await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
-  await expect(page.getByRole('link',{name:'Equipe',exact:true})).toHaveCount(0);expect((await context.request.get('/api/team')).status()).toBe(403);
+  await expect(page.getByRole('link',{name:'Equipe comercial',exact:true})).toBeVisible();expect((await context.request.get('/api/team')).status()).toBe(403);
+  await page.goto('/equipe');await expect(page.getByRole('heading',{name:'Meu perfil comercial'})).toBeVisible();await expect(page.getByRole('button',{name:'Criar equipe'})).toHaveCount(0);
   await page.goto('/configuracoes');await expect(page.getByRole('heading',{name:'Acesso restrito'})).toBeVisible();
 });
 test('layout mobile sem overflow e menu funcional',async({page})=>{
   await page.setViewportSize({width:390,height:844});await page.goto('/login');
   await page.screenshot({path:'test-results/login-mobile.png',fullPage:true});
   await page.getByLabel('E-mail profissional').fill('admin@e2e.local');await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:'test-results/dashboard-mobile.png',fullPage:true});
@@ -42,8 +46,8 @@ test('layout mobile sem overflow e menu funcional',async({page})=>{
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button',{name:'Abrir menu'})).toBeFocused();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.getByRole('button',{name:'Abrir menu'}).click();await page.getByRole('link',{name:'Equipe',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'Pessoas que fazem acontecer.'})).toBeVisible();await expect(page.getByRole('button',{name:'Abrir menu'})).toHaveAttribute('aria-expanded','false');
+  await page.getByRole('button',{name:'Abrir menu'}).click();await page.getByRole('link',{name:'Equipe comercial',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Equipe comercial'})).toBeVisible();await expect(page.getByRole('button',{name:'Abrir menu'})).toHaveAttribute('aria-expanded','false');
 });
 test('formulário associa erros aos campos e mantém senha visível sob controle',async({page})=>{
   await page.goto('/login');
@@ -66,14 +70,15 @@ test('login e painel se adaptam de 320px até tablet sem rolagem horizontal',asy
     expect(await page.getByLabel('E-mail profissional').evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
     const button=await page.getByRole('button',{name:'Entrar na plataforma'}).boundingBox();expect(button!.height).toBeGreaterThanOrEqual(44);
   }
-  await page.getByLabel('E-mail profissional').fill('admin@e2e.local');await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
+  await page.getByLabel('E-mail profissional').fill('contracts@e2e.local');await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
   for(const width of [320,768,1440]){
     await page.setViewportSize({width,height:900});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   }
-  await page.getByRole('link',{name:'Equipe',exact:true}).scrollIntoViewIfNeeded();
-  await expect(page.getByRole('link',{name:'Equipe',exact:true})).toBeInViewport();
+  await page.getByRole('link',{name:'Equipe comercial',exact:true}).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('link',{name:'Equipe comercial',exact:true})).toBeInViewport();
   await page.getByRole('link',{name:'Configurações',exact:true}).scrollIntoViewIfNeeded();
   await expect(page.getByRole('link',{name:'Configurações',exact:true})).toBeInViewport();
   await expect(page.getByText('Propostas',{exact:true})).not.toBeVisible();
