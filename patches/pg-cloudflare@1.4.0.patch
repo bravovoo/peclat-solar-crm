@@ -1,0 +1,13 @@
+diff --git a/dist/index.js b/dist/index.js
+index 7f0933ec1b3a5f3ce4a0d7d5b8fa00f9a1fe553e..5711c5a0fe6fc639d06a1da4a9635a7f1c656928 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -94,7 +94,7 @@ class CloudflareSocket extends events_1.EventEmitter {
+     end(data = Buffer.alloc(0), encoding = 'utf8', callback = () => { }) {
+         log('ending CF socket');
+         this.write(data, encoding, (err) => {
+-            this._cfSocket.close();
++            this._cfSocket?.close();
+             if (callback)
+                 callback(err);
+         });

@@ -11,3 +11,6 @@ onlyBuiltDependencies:
   - esbuild
   - unrs-resolver
   - workerd
+
+patchedDependencies:
+  pg-cloudflare@1.4.0: patches/pg-cloudflare@1.4.0.patch

@@ -46,6 +46,14 @@ function hyperdriveClient(connectionString: string) {
   return new pg.Client({ connectionString, connectionTimeoutMillis: 5000, statement_timeout: 10000 });
 }
 
+async function closeHyperdriveClient(client: pg.Client) {
+  try {
+    await client.end();
+  } catch (error) {
+    console.error('database_client_close_failed', { type: error instanceof Error ? error.name : 'unknown' });
+  }
+}
+
 export function database(): Database {
   const config = connection();
   if (!config.hyperdrive) return localPool(config.connectionString);
@@ -56,7 +64,7 @@ export function database(): Database {
         await client.connect();
         return await client.query(text, values);
       } finally {
-        await client.end();
+        await closeHyperdriveClient(client);
       }
     }) as pg.Pool['query'],
     end: async () => {},
@@ -70,7 +78,11 @@ async function runTransaction<T>(client: QueryClient, work: (client: QueryClient
     await client.query('COMMIT');
     return result;
   } catch (error) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('database_rollback_failed', { type: rollbackError instanceof Error ? rollbackError.name : 'unknown' });
+    }
     throw error;
   }
 }
@@ -83,7 +95,7 @@ export async function transaction<T>(work: (client: QueryClient) => Promise<T>):
       await client.connect();
       return await runTransaction(client, work);
     } finally {
-      await client.end();
+      await closeHyperdriveClient(client);
     }
   }
   const client = await localPool(config.connectionString).connect();

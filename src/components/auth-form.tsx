@@ -27,7 +27,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       const response = await fetch(`/api/auth/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       const result = await response.json();
       if (!response.ok) { setError(result.error ?? 'Não foi possível continuar.'); return; }
-      if (mode === 'login') { router.replace('/'); router.refresh(); }
+      if (mode === 'login') router.replace('/');
       else { setSuccess(true); if (mode === 'reset') window.history.replaceState(null, '', '/redefinir-senha'); }
     } catch { setError('Não foi possível conectar. Confira sua conexão e tente novamente.'); }
   }

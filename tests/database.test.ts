@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
+import pg from 'pg';
 import EmbeddedPostgres from '../scripts/embedded-db';
 import { database, transaction } from '../src/server/db';
 import { migrate } from '../scripts/migrate';
@@ -67,6 +68,18 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
       throw new Error('rollback esperado');
     }),/rollback esperado/);
     assert.equal((await database().query<{total:number}>("SELECT count(*)::int total FROM audit_logs WHERE action='hyperdrive.rollback'")).rows[0].total,0);
+    const prototype=pg.Client.prototype as unknown as {end:()=>Promise<void>};
+    const originalEnd=prototype.end;
+    prototype.end=async()=>{throw new Error('encerramento do socket já concluído');};
+    try{
+      const result=await transaction(async client=>{
+        await client.query('INSERT INTO audit_logs(organization_id,action) VALUES ($1,$2)',[orgA,'hyperdrive.close_error']);
+        return 'committed';
+      });
+      assert.equal(result,'committed');
+      await assert.rejects(()=>transaction(async()=>{throw new Error('erro original preservado');}),/erro original preservado/);
+    }finally{prototype.end=originalEnd;}
+    assert.equal((await database().query<{total:number}>("SELECT count(*)::int total FROM audit_logs WHERE action='hyperdrive.close_error'")).rows[0].total,1);
   }finally{
     if(previous===undefined)delete scope[key];else scope[key]=previous;
   }
