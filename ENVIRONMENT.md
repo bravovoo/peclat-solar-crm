@@ -8,7 +8,7 @@
 
 SMTP_HOST/PORT/SECURE/USER/PASSWORD e MAIL_FROM configuram o transporte de recuperação. SMTP_HOST vazio desabilita a recuperação com resposta de indisponibilidade. Falha de entrega não revela existência de usuário; invalida token criado e registra somente código de erro, sem destinatário ou token. Consulte logs operacionais para falhas. Localmente use Mailpit, sem envio para terceiros.
 
-META_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_BUSINESS_ACCOUNT_ID, WHATSAPP_VERIFY_TOKEN, META_APP_SECRET e GRAPH_API_VERSION estão reservadas; não são usadas pela FASE 1. Não colocar prefixo NEXT_PUBLIC em credenciais.
+`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_VERIFY_TOKEN` e `WHATSAPP_APP_SECRET` são secrets server-only reservados para a integração oficial da Meta. Na Fase 8.1 eles não ativam envio ou recebimento de mensagens. Os identificadores não secretos da conta são administrados no CRM e isolados por organização. Não usar prefixo `NEXT_PUBLIC_`, não persistir os valores dos secrets no banco e não incluí-los no Git ou em logs.
 
 `.env`, `.local`, dados do banco, credenciais e logs são ignorados pelo Git. Não incluir em pacotes de entrega. A instalação de dependências mantém TLS validado; neste computador foi necessário NODE_USE_SYSTEM_CA=1 para confiar nos certificados do Windows. Não desabilitar verificação TLS.
 

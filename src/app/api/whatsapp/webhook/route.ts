@@ -1,0 +1,6 @@
+import {NextResponse} from 'next/server';
+import {AccessError} from '@/modules/auth/policy';
+import {failure} from '@/server/http';
+async function equalSecret(received:string,expected:string){const bytes=new TextEncoder(),[a,b]=await Promise.all([crypto.subtle.digest('SHA-256',bytes.encode(received)),crypto.subtle.digest('SHA-256',bytes.encode(expected))]);return [...new Uint8Array(a)].every((value,index)=>value===new Uint8Array(b)[index]);}
+export async function GET(request:Request){try{const url=new URL(request.url),mode=url.searchParams.get('hub.mode')??'',token=url.searchParams.get('hub.verify_token')??'',challenge=url.searchParams.get('hub.challenge')??'',expected=process.env.WHATSAPP_VERIFY_TOKEN;if(!expected)throw new AccessError(503,'Webhook ainda não configurado.');if(mode!=='subscribe'||!token||!challenge||!(await equalSecret(token,expected)))throw new AccessError(403,'Verificação recusada.');return new NextResponse(challenge,{status:200,headers:{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'}});}catch(error){return failure(error);}}
+export async function POST(){return NextResponse.json({error:'Recebimento de eventos ainda não está habilitado.'},{status:503,headers:{'Cache-Control':'no-store'}});}

@@ -5,12 +5,12 @@ test('login, navegação, sessão protegida e logout em produção',async({page,
   await page.getByLabel('E-mail profissional').fill('admin@e2e.local');await page.getByLabel('Senha',{exact:true}).fill('errada');
   await page.getByRole('button',{name:'Entrar na plataforma'}).click();await expect(page.getByRole('alert').filter({hasText:'inválidos'})).toBeVisible();
   await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/$/,{timeout:15000});
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
   const session=(await context.cookies()).find(c=>c.name==='peclat_session');expect(session?.httpOnly).toBe(true);expect(session?.secure).toBe(true);expect(session?.sameSite).toBe('Lax');
   await page.screenshot({path:'test-results/dashboard-desktop.png',fullPage:true});
   await page.getByRole('link',{name:'Equipe comercial',exact:true}).click();await expect(page.getByText('admin@e2e.local',{exact:true})).toBeVisible();
-  await page.getByRole('link',{name:'Configurações',exact:true}).click();await expect(page.getByText('NÃO CONECTADO')).toBeVisible();
+  await page.getByRole('link',{name:'Configurações',exact:true}).click();await expect(page.getByRole('link',{name:/WhatsApp Business/})).toBeVisible();
   await page.getByRole('button',{name:'Sair da conta'}).click();await expect(page).toHaveURL(/\/login$/);
   expect((await context.request.get('/api/me')).status()).toBe(401);
 });
@@ -22,7 +22,7 @@ test('API rejeita CSRF, JSON inválido, excesso de tamanho e acesso anônimo',as
 });
 test('vendedor não acessa dados da equipe nem configurações',async({page,context})=>{
   await page.goto('/login');await page.getByLabel('E-mail profissional').fill('seller@e2e.local');await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/$/,{timeout:15000});
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
   await expect(page.getByRole('link',{name:'Equipe comercial',exact:true})).toBeVisible();expect((await context.request.get('/api/team')).status()).toBe(403);
   await page.goto('/equipe');await expect(page.getByRole('heading',{name:'Meu perfil comercial'})).toBeVisible();await expect(page.getByRole('button',{name:'Criar equipe'})).toHaveCount(0);

@@ -17,6 +17,7 @@ import { followUp, getOpportunity, getTask, indicators, listOpportunities, listT
 import { distributeLeads, setTeamDistribution, transferPortfolio } from '../src/modules/commercial/distribution';
 import {performanceDashboard,saveGoal} from '../src/modules/commercial-goals/repository';
 import {createManagedUser,resetManagedUserAccess,updateManagedUser,userAdministration} from '../src/modules/users/repository';
+import {saveWhatsAppConfiguration,whatsappActionAvailability,whatsappAdminConfiguration} from '../src/modules/whatsapp/repository';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
 const password='Teste exclusivo 2026!';
@@ -44,7 +45,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,17);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,18);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
   const key=Symbol.for('__cloudflare-context__');
@@ -92,7 +93,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,63);
+  assert.equal(tables.rowCount,65);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
@@ -109,6 +110,19 @@ test('permissões efetivas e consultas não vazam membros ou auditoria de outro 
   await database().query("INSERT INTO audit_logs(organization_id,action) VALUES ($1,'other.private')",[orgB]);
   assert.ok((await recentAudit(admin)).every(e=>e.action!=='other.private'));
   await assert.rejects(()=>recentAudit(seller),{status:403});
+});
+test('fundação WhatsApp restringe configuração, mantém secrets fora do banco e isola organizações',async()=>{
+ const seller=(await sessionActor(sellerToken))!,outsider=(await sessionActor(await login({organization:'outra-empresa',email:'outsider@test.local',password})))!;
+ const empty=await whatsappAdminConfiguration(admin);assert.equal(empty.status,'not_configured');assert.equal(empty.configuration,null);
+ await assert.rejects(()=>whatsappAdminConfiguration(seller),{status:403});
+ const saved=await saveWhatsAppConfiguration(admin,{account_name:'Peclat Solar',phone_number_id:'123456789',business_account_id:'987654321',display_phone_number:'+55 31 99999-1234',api_version:'v99.0',version:null});
+ assert.equal(saved.status,'incomplete');assert.equal(saved.configuration?.account_name,'Peclat Solar');assert.equal('access_token' in (saved.configuration??{}),false);assert.equal('verify_token' in (saved.configuration??{}),false);
+ const outside=await whatsappAdminConfiguration(outsider);assert.equal(outside.configuration,null);
+ await assert.rejects(()=>saveWhatsAppConfiguration(seller,{account_name:'Negado',phone_number_id:'',business_account_id:'',display_phone_number:'',api_version:'',version:null}),{status:403});
+ assert.equal((await whatsappActionAvailability(seller,'(31) 99999-1234')).available,false);
+ const oldAccess=process.env.WHATSAPP_ACCESS_TOKEN,oldVerify=process.env.WHATSAPP_VERIFY_TOKEN,oldSecret=process.env.WHATSAPP_APP_SECRET;process.env.WHATSAPP_ACCESS_TOKEN='test-only';process.env.WHATSAPP_VERIFY_TOKEN='test-only';process.env.WHATSAPP_APP_SECRET='test-only';
+ try{await database().query("UPDATE whatsapp_integrations SET status='connected' WHERE organization_id=$1",[orgA]);assert.equal((await whatsappActionAvailability(seller,'(31) 99999-1234')).available,true);assert.equal((await whatsappActionAvailability(seller,'inválido')).available,false);assert.equal((await whatsappActionAvailability(outsider,'(31) 99999-1234')).available,false);}finally{if(oldAccess===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=oldAccess;if(oldVerify===undefined)delete process.env.WHATSAPP_VERIFY_TOKEN;else process.env.WHATSAPP_VERIFY_TOKEN=oldVerify;if(oldSecret===undefined)delete process.env.WHATSAPP_APP_SECRET;else process.env.WHATSAPP_APP_SECRET=oldSecret;await database().query("UPDATE whatsapp_integrations SET status='incomplete' WHERE organization_id=$1",[orgA]);}
+ const audit=(await database().query("SELECT action,detail FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.%'",[orgA])).rows;assert.deepEqual(audit.map(row=>row.action),['whatsapp.configuration_created']);assert.ok(audit.every(row=>!row.detail.includes('test-only')));
 });
 test('admin gerencia usuários internos com credencial temporária, isolamento e auditoria',async()=>{
   const created=await createManagedUser(admin,{name:'Vendedora Interna',email:'nova.vendedora@test.local',role_code:'seller',active:true});
