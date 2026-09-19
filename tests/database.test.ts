@@ -16,6 +16,7 @@ import { dashboard, getRecord, globalSearch, listRecords, saveRecord } from '../
 import { followUp, getOpportunity, getTask, indicators, listOpportunities, listTasks, opportunityFeed, pipeline, saveOpportunity } from '../src/modules/commercial/repository';
 import { distributeLeads, setTeamDistribution, transferPortfolio } from '../src/modules/commercial/distribution';
 import {performanceDashboard,saveGoal} from '../src/modules/commercial-goals/repository';
+import {createManagedUser,resetManagedUserAccess,updateManagedUser,userAdministration} from '../src/modules/users/repository';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
 const password='Teste exclusivo 2026!';
@@ -43,7 +44,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,16);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,17);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
   const key=Symbol.for('__cloudflare-context__');
@@ -108,6 +109,37 @@ test('permissões efetivas e consultas não vazam membros ou auditoria de outro 
   await database().query("INSERT INTO audit_logs(organization_id,action) VALUES ($1,'other.private')",[orgB]);
   assert.ok((await recentAudit(admin)).every(e=>e.action!=='other.private'));
   await assert.rejects(()=>recentAudit(seller),{status:403});
+});
+test('admin gerencia usuários internos com credencial temporária, isolamento e auditoria',async()=>{
+  const created=await createManagedUser(admin,{name:'Vendedora Interna',email:'nova.vendedora@test.local',role_code:'seller',active:true});
+  const managerCreated=await createManagedUser(admin,{name:'Gerente Interno',email:'novo.gerente@test.local',role_code:'manager',active:true});
+  await assert.rejects(()=>createManagedUser(admin,{name:'E-mail repetido',email:'nova.vendedora@test.local',role_code:'seller',active:true}),{status:409});
+  assert.ok(created.id);assert.match(created.temporary_password,/^Pec-.+!9$/);
+  const overview=await userAdministration(admin),managed=overview.users.find(user=>user.id===created.id)!;
+  assert.equal(managed.email,'nova.vendedora@test.local');assert.equal(managed.role_code,'seller');assert.equal(managed.active,true);
+  assert.equal('password_hash' in managed,false);assert.equal('temporary_password' in managed,false);
+  const firstToken=await login({organization:'peclat-solar',email:'nova.vendedora@test.local',password:created.temporary_password});
+  const firstActor=(await sessionActor(firstToken))!;assert.equal(firstActor.role,'seller');
+  await assert.rejects(()=>userAdministration(firstActor),{status:403});
+  const outsider=(await sessionActor(await login({organization:'outra-empresa',email:'outsider@test.local',password})))!;
+  assert.equal((await userAdministration(outsider)).users.some(user=>user.id===created.id),false);
+  const teamOverview=await commercialTeamOverview(admin);
+  assert.ok(teamOverview.members.some(member=>member.id===managerCreated.id&&member.role_code==='manager'));
+  assert.ok(teamOverview.members.some(member=>member.id===created.id&&member.role_code==='seller'));
+  assert.ok(teamOverview.candidates.some(member=>member.id===created.id));
+  const reset=await resetManagedUserAccess(admin,created.id);assert.notEqual(reset.temporary_password,created.temporary_password);assert.equal(await sessionActor(firstToken),null);
+  await assert.rejects(()=>login({organization:'peclat-solar',email:'nova.vendedora@test.local',password:created.temporary_password}),{status:401});
+  const secondToken=await login({organization:'peclat-solar',email:'nova.vendedora@test.local',password:reset.temporary_password});assert.ok(await sessionActor(secondToken));
+  const refreshed=(await userAdministration(admin)).users.find(user=>user.id===created.id)!;
+  await updateManagedUser(admin,created.id,{name:'Vendedora Interna',role_code:'seller',active:false,version:refreshed.version});
+  assert.equal(await sessionActor(secondToken),null);await assert.rejects(()=>login({organization:'peclat-solar',email:'nova.vendedora@test.local',password:reset.temporary_password}),{status:401});
+  assert.equal((await commercialTeamOverview(admin)).candidates.some(member=>member.id===created.id),false);
+  const inactive=(await userAdministration(admin)).users.find(user=>user.id===created.id)!;
+  await updateManagedUser(admin,created.id,{name:'Vendedora Interna',role_code:'support',active:true,version:inactive.version});
+  const auditRows=await database().query("SELECT action,subject_user_id,detail FROM audit_logs WHERE organization_id=$1 AND subject_user_id=$2 AND action LIKE 'users.%' ORDER BY created_at",[orgA,created.id]);
+  assert.deepEqual(auditRows.rows.map(row=>row.action).sort(),['users.access_reset','users.activated','users.created','users.deactivated','users.role_changed']);assert.ok(auditRows.rows.every(row=>row.subject_user_id===created.id&&row.detail));
+  const own=(await userAdministration(admin)).users.find(user=>user.id===admin.userId)!;
+  await assert.rejects(()=>updateManagedUser(admin,admin.userId,{name:admin.name,role_code:'seller',active:true,version:own.version}),{status:409});
 });
 test('equipes comerciais usam membros existentes, respeitam organização e preservam histórico',async()=>{
   const hash=await hashPassword(password);

@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit",
     "local:deps": "npm --prefix tools/local-postgres ci --include=optional",
     "pretest": "pnpm run local:deps",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "pretest:e2e": "pnpm run local:deps",
     "test:e2e": "playwright test",
     "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
