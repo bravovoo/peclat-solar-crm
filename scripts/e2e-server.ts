@@ -39,6 +39,11 @@ const distributionUsers=[
   ['assignment-a','Vendedor distribuição A','seller',true],
   ['assignment-b','Vendedor distribuição B','seller',true],
   ['assignment-inactive','Vendedor distribuição inativo','seller',false],
+  ['goals-admin','Admin metas E2E','admin',true],
+  ['goals-manager','Gerente metas E2E','manager',true],
+  ['goals-a','Vendedor metas A','seller',true],
+  ['goals-b','Vendedor metas B','seller',true],
+  ['goals-outside','Vendedor metas externo','seller',true],
 ] as const;
 for(const [email,name,role,active] of distributionUsers){
   const person=(await database().query('INSERT INTO users(email,name,password_hash,active) VALUES ($1,$2,$3,$4) RETURNING id',[`${email}@e2e.local`,name,hash,active])).rows[0];

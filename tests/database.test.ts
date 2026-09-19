@@ -15,6 +15,7 @@ import { changeCommercialTeamMember, commercialTeamOverview, saveCommercialTeam 
 import { dashboard, getRecord, globalSearch, listRecords, saveRecord } from '../src/modules/crm/repository';
 import { followUp, getOpportunity, getTask, indicators, listOpportunities, listTasks, opportunityFeed, pipeline, saveOpportunity } from '../src/modules/commercial/repository';
 import { distributeLeads, setTeamDistribution, transferPortfolio } from '../src/modules/commercial/distribution';
+import {performanceDashboard,saveGoal} from '../src/modules/commercial-goals/repository';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
 const password='Teste exclusivo 2026!';
@@ -42,7 +43,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,15);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,16);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
   const key=Symbol.for('__cloudflare-context__');
@@ -90,7 +91,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,61);
+  assert.equal(tables.rowCount,63);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
@@ -470,4 +471,32 @@ test('recuperação usa token único, invalida sessões e não envia para conta 
   assert.equal(attempts.filter(r=>r.status==='fulfilled').length,1);
   assert.equal(await sessionActor(adminToken),null);
   assert.ok(await login({organization:'peclat-solar',email:'admin@test.local',password:nextPassword}));
+});
+
+test('metas e desempenho usam resultados reais e respeitam vendedor, equipe e organização',async()=>{
+ const hash=await hashPassword(password),suffix=Date.now();
+ const managerUser=(await database().query('INSERT INTO users(email,name,password_hash) VALUES ($1,$2,$3) RETURNING id',[`goals-manager-${suffix}@test.local`,'Gerente de metas',hash])).rows[0];
+ const sellerUser=(await database().query('INSERT INTO users(email,name,password_hash) VALUES ($1,$2,$3) RETURNING id',[`goals-seller-${suffix}@test.local`,'Vendedor de metas',hash])).rows[0];
+ const otherSeller=(await database().query('INSERT INTO users(email,name,password_hash) VALUES ($1,$2,$3) RETURNING id',[`goals-other-${suffix}@test.local`,'Vendedor externo às metas',hash])).rows[0];
+ for(const [id,role] of [[managerUser.id,'manager'],[sellerUser.id,'seller'],[otherSeller.id,'seller']])await database().query('INSERT INTO memberships(organization_id,user_id,role_code) VALUES ($1,$2,$3)',[orgA,id,role]);
+ const manager=(await sessionActor(await login({organization:'peclat-solar',email:`goals-manager-${suffix}@test.local`,password})))!;
+ const seller=(await sessionActor(await login({organization:'peclat-solar',email:`goals-seller-${suffix}@test.local`,password})))!;
+ const outside=(await sessionActor(await login({organization:'peclat-solar',email:`goals-other-${suffix}@test.local`,password})))!;
+ const team=await saveCommercialTeam(manager,{name:`Equipe de metas ${suffix}`,manager_user_id:manager.userId});await changeCommercialTeamMember(manager,team,{user_id:seller.userId,action:'add'});
+ const lead=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,created_at) VALUES ($1,'lead',$2,'Lead meta','2026-09-02') RETURNING id",[orgA,seller.userId])).rows[0].id;
+ const customer=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,created_at) VALUES ($1,'customer',$2,'Cliente meta','2026-09-03') RETURNING id",[orgA,seller.userId])).rows[0].id;
+ await database().query("INSERT INTO crm_activities(organization_id,record_id,actor_id,action,created_at) VALUES ($1,$2,$3,'note.created','2026-09-04')",[orgA,lead,seller.userId]);
+ await database().query("INSERT INTO crm_opportunities(organization_id,title,customer_id,owner_id,stage,status,estimated_value,closed_at,closed_value,closed_by,closed_owner_id,created_at) VALUES ($1,'Venda meta',$2,$3,'won','won',5000,'2026-09-10',5000,$3,$3,'2026-09-01')",[orgA,customer,seller.userId]);
+ await database().query("INSERT INTO contracts(organization_id,client_id,responsible_user_id,contract_number,title,status,total_value,net_value,balance_value,payment_method,installments_count,first_due_date,signed_at,created_by,updated_by) VALUES ($1,$2,$3,$4,'Contrato meta','signed',5000,5000,5000,'pix',1,'2026-10-01','2026-09-11',$3,$3)",[orgA,customer,seller.userId,`META-${suffix}`]);
+ await database().query("INSERT INTO crm_tasks(organization_id,record_id,owner_id,title,status,due_at,due_date,completed_at,created_at) VALUES ($1,$2,$3,'Tarefa meta','completed','2026-09-12','2026-09-12','2026-09-12','2026-09-05')",[orgA,lead,seller.userId]);
+ const individual=await saveGoal(manager,{target_kind:'seller',seller_user_id:seller.userId,team_id:null,metric:'sales_value',period:'monthly',starts_on:'2026-09-01',ends_on:'2026-09-30',target_value:10000});
+ await saveGoal(manager,{target_kind:'team',seller_user_id:null,team_id:team,metric:'new_customers',period:'quarterly',starts_on:'2026-07-01',ends_on:'2026-09-30',target_value:3});
+ const managerView=await performanceDashboard(manager,{from:'2026-09-01',to:'2026-09-30'});assert.equal(managerView.people.length,1);assert.deepEqual([managerView.people[0].leads_received,managerView.people[0].leads_worked,managerView.people[0].customers,managerView.people[0].opportunities_won,managerView.people[0].contracts,managerView.people[0].sales_value,managerView.people[0].tasks_completed],[1,1,1,1,1,5000,1]);
+ assert.equal(managerView.goals.find(goal=>goal.id===individual)?.progress,50);assert.equal(managerView.goals.find(goal=>goal.team_id===team)?.actual_value,1);
+ const current=managerView.goals.find(goal=>goal.id===individual)!;await saveGoal(manager,{target_kind:'seller',seller_user_id:seller.userId,team_id:null,metric:'sales_value',period:'monthly',starts_on:'2026-09-01',ends_on:'2026-09-30',target_value:6000,version:current.version},individual);
+ const updated=await performanceDashboard(manager,{from:'2026-09-01',to:'2026-09-30'});assert.equal(updated.goals.find(goal=>goal.id===individual)?.target_value,6000);assert.ok(updated.history.some(item=>item.action==='updated'&&item.previous_value===10000));
+ const sellerView=await performanceDashboard(seller,{from:'2026-09-01',to:'2026-09-30'});assert.deepEqual(sellerView.people.map(item=>item.user_id),[seller.userId]);assert.deepEqual(sellerView.goals.map(goal=>goal.id),[individual]);assert.equal(sellerView.can_manage,false);
+ const outsideView=await performanceDashboard(outside,{from:'2026-09-01',to:'2026-09-30'});assert.equal(outsideView.goals.length,0);assert.deepEqual(outsideView.people.map(item=>item.user_id),[outside.userId]);
+ await assert.rejects(()=>saveGoal(manager,{target_kind:'seller',seller_user_id:outside.userId,team_id:null,metric:'contracts_closed',period:'annual',starts_on:'2026-01-01',ends_on:'2026-12-31',target_value:2}),{status:403});
+ await assert.rejects(()=>saveGoal(manager,{target_kind:'seller',seller_user_id:seller.userId,team_id:null,metric:'contracts_closed',period:'monthly',starts_on:'2026-09-02',ends_on:'2026-09-30',target_value:2}));
 });

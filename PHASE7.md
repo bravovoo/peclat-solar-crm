@@ -36,4 +36,16 @@ Testes de integração cobrem contagens exatas por perfil/organização, filtros
 
 Na validação final, passaram 72 testes unitários/de integração e 24 cenários Playwright. TypeScript, lint, build Next.js, bundle OpenNext/Cloudflare, dry-run do Wrangler e `git diff --check` também passaram. A migration 015 foi validada em bancos temporários com as migrations 001–014 e deve ser aplicada pelo runner somente depois da publicação do código.
 
-Fase 7.3, metas, comissões, ranking, cadastro público, WhatsApp e automações de mensagens não fazem parte desta entrega.
+## FASE 7.3 — Metas e desempenho comercial
+
+As metas reutilizam os vendedores, equipes e escopos das Fases 7.1 e 7.2. `commercial_goals` armazena somente organização, destinatário (vendedor ou equipe), indicador, periodicidade, datas e valor alvo. Resultados não são persistidos: valor vendido e contratos usam contratos assinados/ativos/concluídos e `signed_at`; oportunidades ganhas usam `closed_at` e o responsável preservado no fechamento; novos clientes usam os cadastros existentes no período. `commercial_goal_history` preserva criação e edição com valor anterior, novo valor, autor, data e snapshot.
+
+Os períodos aceitos são mensal, trimestral e anual, sempre com limites completos e validados. Os indicadores são valor vendido, contratos fechados, oportunidades ganhas e novos clientes. A página `/desempenho` também agrega leads recebidos e trabalhados, clientes, oportunidades abertas/ganhas/perdidas, contratos, valor contratado, ticket médio, tarefas abertas/concluídas e conversão. As consultas usam agregações por responsável no PostgreSQL, sem uma consulta por vendedor e sem duplicar dados financeiros.
+
+Administrador vê a organização; gerente vê metas e vendedores das equipes ativas que gerencia; vendedor vê somente suas metas e desempenho. Metas de equipe são apresentadas ao gerente responsável e ao administrador. Filtros por período, equipe e vendedor respeitam o mesmo limite. Não há acesso entre organizações ou equipes.
+
+`016_commercial_goals.sql` cria `commercial_goals` e `commercial_goal_history`, índices por período/destinatário e as permissões `commercial_goals.read` e `commercial_goals.manage`. As tabelas usam RLS sem FORCE ou políticas públicas e revogam privilégios de PUBLIC, anon, authenticated e service_role. A gestão recebe leitura e edição; vendedores recebem somente leitura.
+
+Na validação local, passaram 73 testes unitários/de integração e 25 cenários Playwright, incluindo 390x844 e 1440x900. TypeScript, lint, build Next.js, bundle OpenNext/Cloudflare, dry-run do Wrangler e `git diff --check` também fazem parte da validação final. A migration 016 foi validada em bancos temporários com as migrations anteriores antes da aplicação remota.
+
+Comissões, bônus, ranking, gamificação, cadastro público, WhatsApp, automações e Fase 7.4 não fazem parte desta entrega.
