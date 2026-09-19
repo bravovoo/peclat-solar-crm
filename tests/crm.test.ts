@@ -298,6 +298,24 @@ test('contrato calcula itens, numeração, parcelas, pagamentos, escopo e docume
  const sellerVersion=(await getContractDetail(seller,created.id)).contract.version;await assert.rejects(()=>setContractStatus(seller,created.id,{status:'cancelled',version:sellerVersion}),{status:403});const current=(await getContractDetail(admin,created.id)).contract;const cancelled=await setContractStatus(admin,created.id,{status:'cancelled',version:current.version});assert.equal(cancelled.status,'cancelled');
 });
 
+test('gerente edita contrato autorizado com vínculos preservados sem abrir outra carteira',async()=>{
+ const user=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('manager-contract@test.local','Gerente contratos','test-only-unused') RETURNING id")).rows[0];
+ await database().query("INSERT INTO memberships(organization_id,user_id,role_code) VALUES ($1,$2,'manager')",[admin.organizationId,user.id]);
+ const permissions=(await database().query<{permission_code:string}>("SELECT permission_code FROM role_permissions WHERE role_code='manager'")).rows.map(row=>row.permission_code);
+ const manager:Actor={...admin,userId:user.id,role:'manager',permissions};
+ const client=await saveRecord(admin,'customer',{name:'Cliente contrato fora da equipe',owner_id:otherSeller.userId});
+ const other=await saveRecord(admin,'customer',{name:'Outro cliente contrato restrito',owner_id:otherSeller.userId});
+ const opportunity=await saveOpportunity(admin,{title:'Projeto contrato restrito',customer_id:client.id,owner_id:otherSeller.userId});
+ const body={client_id:client.id,opportunity_id:opportunity.id,responsible_user_id:otherSeller.userId,title:'Contrato preservado',items:[{description:'Serviço manual',category:'service',quantity:1,unit_value:100}],down_payment_value:100,payment_method:'pix',installments_count:0};
+ const contract=await saveContract(admin,body);
+ await assert.rejects(()=>getRecord(manager,client.id),{status:404});
+ const updated=await saveContract(manager,{...body,title:'Contrato revisado',version:contract.version},contract.id);
+ assert.equal(updated.version,2);assert.equal(updated.client_id,client.id);assert.equal(updated.opportunity_id,opportunity.id);
+ await assert.rejects(()=>saveContract(manager,{...body,client_id:other.id,opportunity_id:null,version:updated.version},contract.id),{status:404});
+ await database().query("UPDATE crm_records SET status='archived' WHERE id=$1",[client.id]);
+ await assert.rejects(()=>saveContract(manager,{...body,version:updated.version},contract.id),{status:400});
+});
+
 test('instalação nasce somente de contrato fechado, sem duplicação e com os itens vendidos',async()=>{
  const opportunity=await saveOpportunity(seller,{title:'Oportunidade para instalação',customer_id:customer.id});
  const contract=await saveContract(seller,{client_id:customer.id,opportunity_id:opportunity.id,title:'Contrato para instalação',items:[{description:'Kit fotovoltaico vendido',category:'manual',quantity:2,unit_value:1000,discount_value:0}],down_payment_value:2000,payment_method:'pix',installments_count:0});

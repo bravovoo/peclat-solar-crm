@@ -17,6 +17,7 @@ import {addInstallationFile,deleteInstallationFile,getInstallationFile,saveInsta
 import {MAX_INSTALLATION_FILE_BYTES} from '@/modules/installations/file-storage';
 import {addMaintenanceItem,addTicketComment,getMaintenance,getTicket,getWarranty,linkTask,listClaims,listLinkedTasks,listMaintenanceItems,listMaintenances,listTickets,listWarranties,postSalesDashboard,postSalesOptions,saveClaim,saveMaintenance,saveTicket,saveWarranty,ticketHistory} from '@/modules/post-sales/repository';
 import {addPostSalesFile,deletePostSalesFile,getPostSalesFile,listPostSalesFiles} from '@/modules/post-sales/files';
+import {distributeLeads,transferPortfolio} from '@/modules/commercial/distribution';
 type Context={params:Promise<{resource:string;segments?:string[]}>};
 const resources:Record<string,Kind>={leads:'lead',customers:'customer',companies:'company'};
 const respond=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
@@ -153,6 +154,8 @@ async function handle(request:Request,context:Context){
    if(resource==='contract-payments'&&request.method==='PUT'&&id&&!action)return respond(await updatePayment(actor,id,await readMutation(request)));
    if(resource==='documents'&&request.method==='POST'&&!id){const form=await readMultipartMutation(request,MAX_PDF_BYTES+131072);const file=form.get('file');if(!(file instanceof File))throw new AccessError(400,'Selecione o arquivo PDF.');const metadata=Object.fromEntries(['customer_id','opportunity_id','contract_id','document_type','name','budget_value','valid_until','notes'].map(key=>[key,String(form.get(key)??'')]));return respond(await createDocument(actor,metadata,{name:file.name,type:file.type,bytes:new Uint8Array(await file.arrayBuffer())}),201);}
    const body=await readMutation(request);
+   if(resource==='leads'&&id==='distribute'&&!action&&request.method==='POST')return respond(await distributeLeads(actor,body));
+   if(resource==='commercial-portfolio'&&!id&&request.method==='POST')return respond(await transferPortfolio(actor,body));
    if(resource==='documents'){
     if(request.method==='PUT'&&id&&!action)return respond(await updateDocument(actor,id,body));
     if(request.method==='POST'&&id&&action==='status'){const parsed=z.object({status:z.string(),version:z.number().int().positive()}).strict().parse(body);return respond(await setDocumentStatus(actor,id,parsed.status,parsed.version));}

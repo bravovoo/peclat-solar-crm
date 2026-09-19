@@ -3,6 +3,7 @@ import { apiActor } from '@/server/session';
 import { failure, readMutation } from '@/server/http';
 import { changeCommercialTeamMember, commercialTeamOverview, saveCommercialTeam } from '@/modules/commercial-teams/repository';
 import { AccessError } from '@/modules/auth/policy';
+import { setTeamDistribution } from '@/modules/commercial/distribution';
 
 type Context = {params: Promise<{segments?: string[]}>};
 async function handle(request: Request, context: Context) {
@@ -15,6 +16,8 @@ async function handle(request: Request, context: Context) {
     if (request.method === 'PUT' && path.length === 1) return respond({id:await saveCommercialTeam(actor,await readMutation(request),path[0])});
     if (request.method === 'POST' && path.length === 2 && path[1] === 'members')
       return respond(await changeCommercialTeamMember(actor,path[0],await readMutation(request)));
+    if (request.method === 'PUT' && path.length === 2 && path[1] === 'distribution')
+      return respond(await setTeamDistribution(actor,path[0],await readMutation(request)));
     throw new AccessError(404,'Recurso não encontrado.');
   } catch (error) { return failure(error); }
 }

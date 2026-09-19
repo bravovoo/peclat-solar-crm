@@ -16,7 +16,7 @@ export const teamMemberInput = z.object({
 
 export type CommercialTeam = {
   id: string; name: string; description: string; manager_user_id: string;
-  manager_name: string; active: boolean; version: number; member_count: number;
+  manager_name: string; active: boolean; auto_distribute: boolean; version: number; member_count: number;
   created_at: string; updated_at: string;
 };
 export type CommercialTeamMember = {

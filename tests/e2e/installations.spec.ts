@@ -23,7 +23,7 @@ test('instalação percorre contrato, edição, status, histórico e telas respo
  await page.getByRole('link',{name:'Criar instalação'}).click();
  await expect(page.getByRole('heading',{name:'Nova instalação'})).toBeVisible();
  await page.getByLabel('Endereço da instalação').fill('Rua Solar, 123, Contagem - MG');
- await page.getByLabel('Equipe').fill('Equipe Campo A');
+ await page.getByRole('textbox',{name:'Equipe',exact:true}).fill('Equipe Campo A');
  await page.getByLabel('Data prevista').fill('2026-10-20');
  await page.getByRole('button',{name:'Criar instalação'}).click();
  await expect(page.getByRole('heading',{name:'Instalação de Cliente Instalação E2E'})).toBeVisible();
@@ -34,7 +34,7 @@ test('instalação percorre contrato, edição, status, histórico e telas respo
  const installationUrl=page.url();
 
  await page.getByRole('link',{name:'Editar instalação'}).click();
- await page.getByLabel('Equipe').fill('Equipe Campo B');
+ await page.getByRole('textbox',{name:'Equipe',exact:true}).fill('Equipe Campo B');
  await page.getByRole('button',{name:'Salvar alterações'}).click();
  await expect(page.getByText('Equipe Campo B')).toBeVisible();
  await page.getByLabel('Novo status da instalação').selectOption('scheduled');

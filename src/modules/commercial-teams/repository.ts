@@ -1,6 +1,7 @@
 import { database, transaction } from '@/server/db';
 import { AccessError, requirePermission, type Actor } from '@/modules/auth/policy';
 import { commercialTeamInput, teamId, teamMemberInput, type CommercialTeam, type CommercialTeamMember } from './domain';
+import { assertManagedTeam } from '@/modules/commercial/scope';
 
 const canManage = (actor: Actor) => actor.permissions.includes('commercial_team.manage');
 const normalizeTeam = (row: CommercialTeam) => ({ ...row, member_count: Number(row.member_count) });
@@ -9,14 +10,14 @@ const normalizeMember = (row: CommercialTeamMember) => ({ ...row, leads: Number(
 export async function commercialTeamOverview(actor: Actor) {
   requirePermission(actor, 'commercial_team.read');
   const manage = canManage(actor);
-  const [teams, members, history] = await Promise.all([
-    database().query<CommercialTeam>(`SELECT t.id,t.name,t.description,t.manager_user_id,u.name manager_name,t.active,t.version,t.created_at,t.updated_at,
+  const [teams, members, history, candidates] = await Promise.all([
+    database().query<CommercialTeam>(`SELECT t.id,t.name,t.description,t.manager_user_id,u.name manager_name,t.active,t.auto_distribute,t.version,t.created_at,t.updated_at,
       count(tm.user_id)::int member_count
       FROM commercial_teams t JOIN users u ON u.id=t.manager_user_id
       LEFT JOIN commercial_team_members tm ON tm.organization_id=t.organization_id AND tm.team_id=t.id
-      WHERE t.organization_id=$1 AND ($2::boolean OR EXISTS (
+      WHERE t.organization_id=$1 AND ($2::boolean OR t.manager_user_id=$3 OR EXISTS (
         SELECT 1 FROM commercial_team_members own WHERE own.organization_id=t.organization_id AND own.team_id=t.id AND own.user_id=$3))
-      GROUP BY t.id,u.name ORDER BY t.active DESC,t.name,t.id`, [actor.organizationId, manage, actor.userId]),
+      GROUP BY t.id,u.name ORDER BY t.active DESC,t.name,t.id`, [actor.organizationId, actor.role==='admin', actor.userId]),
     database().query<CommercialTeamMember>(`SELECT u.id,u.name,u.email,m.role_code,r.name role_name,(u.active AND m.active) active,
       tm.team_id,t.name team_name,manager.name manager_name,
       COALESCE(rec.leads,0)::int leads,COALESCE(rec.customers,0)::int customers,
@@ -29,15 +30,22 @@ export async function commercialTeamOverview(actor: Actor) {
         FROM crm_records WHERE organization_id=m.organization_id AND owner_id=m.user_id AND deleted_at IS NULL) rec ON true
       LEFT JOIN LATERAL (SELECT count(*) total FROM crm_opportunities WHERE organization_id=m.organization_id AND owner_id=m.user_id AND status='open') opp ON true
       LEFT JOIN LATERAL (SELECT count(*) total FROM crm_tasks WHERE organization_id=m.organization_id AND owner_id=m.user_id AND status IN ('pending','in_progress')) tasks ON true
-      WHERE m.organization_id=$1 AND m.role_code IN ('admin','manager','seller') AND ($2::boolean OR m.user_id=$3)
+      WHERE m.organization_id=$1 AND m.role_code IN ('admin','manager','seller') AND ($2::boolean OR m.user_id=$3 OR EXISTS(
+        SELECT 1 FROM commercial_team_members own JOIN commercial_teams managed ON managed.organization_id=own.organization_id AND managed.id=own.team_id
+        WHERE own.organization_id=m.organization_id AND own.user_id=m.user_id AND managed.manager_user_id=$3 AND managed.active))
       ORDER BY CASE m.role_code WHEN 'admin' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,u.name,u.id LIMIT 500`,
-      [actor.organizationId, manage, actor.userId]),
+      [actor.organizationId, actor.role==='admin', actor.userId]),
     manage ? database().query<{id:string;team_id:string;actor_name:string;action:string;detail:string;created_at:string}>(
       `SELECT h.id,h.team_id,u.name actor_name,h.action,h.detail,h.created_at FROM commercial_team_history h
-       JOIN users u ON u.id=h.actor_id WHERE h.organization_id=$1 ORDER BY h.created_at DESC,h.id DESC LIMIT 30`, [actor.organizationId])
+       JOIN users u ON u.id=h.actor_id JOIN commercial_teams t ON t.organization_id=h.organization_id AND t.id=h.team_id
+       WHERE h.organization_id=$1 AND ($2::boolean OR t.manager_user_id=$3) ORDER BY h.created_at DESC,h.id DESC LIMIT 30`, [actor.organizationId,actor.role==='admin',actor.userId])
       : Promise.resolve({rows: []}),
+    manage ? database().query<{id:string;name:string}>(`SELECT u.id,u.name FROM memberships m JOIN users u ON u.id=m.user_id
+      WHERE m.organization_id=$1 AND m.role_code='seller' AND m.active AND u.active
+        AND NOT EXISTS(SELECT 1 FROM commercial_team_members tm WHERE tm.organization_id=m.organization_id AND tm.user_id=m.user_id)
+      ORDER BY u.name,u.id LIMIT 500`, [actor.organizationId]) : Promise.resolve({rows: []}),
   ]);
-  return { teams: teams.rows.map(normalizeTeam), members: members.rows.map(normalizeMember), history: history.rows, can_manage: manage };
+  return { teams: teams.rows.map(normalizeTeam), members: members.rows.map(normalizeMember), history: history.rows, candidates: candidates.rows, can_manage: manage };
 }
 
 async function logChange(db: Pick<ReturnType<typeof database>, 'query'>, actor: Actor, teamIdValue: string, action: string, detail: string) {
@@ -52,6 +60,8 @@ export async function saveCommercialTeam(actor: Actor, input: unknown, id?: stri
   if (id) teamId.parse(id);
   const data = commercialTeamInput.parse(input);
   return transaction(async db => {
+    if(actor.role==='manager'&&data.manager_user_id!==actor.userId)throw new AccessError(403,'Você só pode gerenciar suas próprias equipes.');
+    if(id)await assertManagedTeam(actor,id,db,true);
     const manager = await db.query<{name:string}>(`SELECT u.name FROM memberships m JOIN users u ON u.id=m.user_id
       WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role_code='manager' AND m.active AND u.active`,
       [actor.organizationId, data.manager_user_id]);
@@ -87,6 +97,7 @@ export async function changeCommercialTeamMember(actor: Actor, teamIdValue: stri
   teamId.parse(teamIdValue);
   const data = teamMemberInput.parse(input);
   return transaction(async db => {
+    await assertManagedTeam(actor,teamIdValue,db,true);
     const team = await db.query<{active:boolean;name:string}>(
       'SELECT active,name FROM commercial_teams WHERE organization_id=$1 AND id=$2 FOR UPDATE', [actor.organizationId,teamIdValue]);
     if (!team.rowCount) throw new AccessError(404, 'Equipe não encontrada.');

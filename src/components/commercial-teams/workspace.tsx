@@ -6,7 +6,7 @@ import type { CommercialTeam } from '@/modules/commercial-teams/domain';
 import type { commercialTeamOverview } from '@/modules/commercial-teams/repository';
 
 type Overview=Awaited<ReturnType<typeof commercialTeamOverview>>;
-const labels:Record<string,string>={created:'Equipe criada',updated:'Equipe editada',manager_changed:'Gerente alterado',member_added:'Vendedor adicionado',member_removed:'Vendedor removido',deactivated:'Equipe desativada',reactivated:'Equipe reativada'};
+const labels:Record<string,string>={created:'Equipe criada',updated:'Equipe editada',manager_changed:'Gerente alterado',member_added:'Vendedor adicionado',member_removed:'Vendedor removido',deactivated:'Equipe desativada',reactivated:'Equipe reativada',distribution_changed:'Distribuição automática alterada'};
 
 export function CommercialTeamWorkspace({initial}:{initial:Overview}) {
   const [data,setData]=useState(initial);
@@ -35,6 +35,11 @@ export function CommercialTeamWorkspace({initial}:{initial:Overview}) {
     try {await api(`/api/commercial-teams/${teamId}/members`,'POST',{user_id:userId,action});await refresh();setNotice(action==='add'?'Vendedor adicionado.':'Vendedor removido.');}
     catch (cause) {setError(errorMessage(cause));} finally {setBusy(false);}
   }
+  async function distribution(team:CommercialTeam){
+    setBusy(true);setError('');
+    try {await api(`/api/commercial-teams/${team.id}/distribution`,'PUT',{enabled:!team.auto_distribute,version:team.version});await refresh();setNotice(`Distribuição automática ${team.auto_distribute?'desativada':'ativada'}.`);}
+    catch(cause){setError(errorMessage(cause));}finally{setBusy(false);}
+  }
   return <div className="commercial-team-workspace">
     <div className="page-heading"><div><span className="eyebrow blue">OPERAÇÃO COMERCIAL</span><h1>Equipe comercial</h1><p>Gerentes, vendedores e carteiras de atendimento em uma única visão.</p></div>
       {data.can_manage&&<button className="button primary" onClick={()=>{setError('');setEditing({});}}>Criar equipe</button>}</div>
@@ -50,10 +55,10 @@ export function CommercialTeamWorkspace({initial}:{initial:Overview}) {
       <div className="commercial-team-grid">{data.teams.map(team=><article className="commercial-team-card" key={team.id}>
         <div className="commercial-team-card-heading"><div><h3>{team.name}</h3><p>{team.description||'Sem descrição adicional.'}</p></div><span className="badge">{team.active?'Ativa':'Inativa'}</span></div>
         <p><strong>Gerente:</strong> {team.manager_name}</p><p><strong>Vendedores:</strong> {team.member_count}</p>
-        {data.can_manage&&<div className="commercial-team-actions"><button className="button secondary" onClick={()=>{setError('');setEditing(team);}}>Editar equipe</button></div>}
+        {data.can_manage&&<div className="commercial-team-actions"><button className="button secondary" onClick={()=>{setError('');setEditing(team);}}>Editar equipe</button><button className="button secondary" disabled={busy||!team.active} onClick={()=>distribution(team)}>{team.auto_distribute?'Desativar distribuição automática':'Ativar distribuição automática'}</button></div>}
         <div className="commercial-team-members"><h4>Membros</h4>{sellers.filter(member=>member.team_id===team.id).map(member=><div key={member.id}><span>{member.name}<small>{member.active?'Ativo':'Inativo'}</small></span>{data.can_manage&&<button className="button secondary" disabled={busy} onClick={()=>membership(team.id,member.id,'remove')}>Remover</button>}</div>)}
           {!sellers.some(member=>member.team_id===team.id)&&<p className="muted">Nenhum vendedor nesta equipe.</p>}</div>
-        {data.can_manage&&team.active&&<label className="crm-field"><span>Adicionar vendedor</span><select aria-label={`Adicionar vendedor à ${team.name}`} disabled={busy} defaultValue="" onChange={event=>{const id=event.target.value;if(id)void membership(team.id,id,'add');event.target.value='';}}><option value="">Selecione um vendedor</option>{sellers.filter(member=>member.active&&!member.team_id).map(member=><option value={member.id} key={member.id}>{member.name}</option>)}</select></label>}
+        {data.can_manage&&team.active&&<label className="crm-field"><span>Adicionar vendedor</span><select aria-label={`Adicionar vendedor à ${team.name}`} disabled={busy} defaultValue="" onChange={event=>{const id=event.target.value;if(id)void membership(team.id,id,'add');event.target.value='';}}><option value="">Selecione um vendedor</option>{data.candidates.map(member=><option value={member.id} key={member.id}>{member.name}</option>)}</select></label>}
       </article>)}</div>
     </section>
     <section className="card commercial-team-section"><div className="card-heading"><h2>{data.can_manage?'Pessoas da operação comercial':'Meu perfil comercial'}</h2></div>

@@ -28,6 +28,22 @@ const documentUser=(await database().query("INSERT INTO users(email,name,passwor
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'seller' FROM organizations WHERE slug='peclat-solar'",[documentUser.id]);
 const contractUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('contracts@e2e.local','Gestor de contratos',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[contractUser.id]);
+// Contas exclusivas da distribuição: preservam os cenários anteriores e seus limites de login.
+const distributionUsers=[
+  ['distribution-admin','Admin distribuição','admin',true],
+  ['scope-manager','Gerente carteira E2E','manager',true],
+  ['scope-a','Vendedor carteira A','seller',true],
+  ['scope-b','Vendedor carteira B','seller',true],
+  ['scope-outside','Vendedor fora da equipe','seller',true],
+  ['assignment-manager','Gerente distribuição E2E','manager',true],
+  ['assignment-a','Vendedor distribuição A','seller',true],
+  ['assignment-b','Vendedor distribuição B','seller',true],
+  ['assignment-inactive','Vendedor distribuição inativo','seller',false],
+] as const;
+for(const [email,name,role,active] of distributionUsers){
+  const person=(await database().query('INSERT INTO users(email,name,password_hash,active) VALUES ($1,$2,$3,$4) RETURNING id',[`${email}@e2e.local`,name,hash,active])).rows[0];
+  await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,$2 FROM organizations WHERE slug='peclat-solar'",[person.id,role]);
+}
 const app=spawn(process.execPath,[resolve('node_modules/next/dist/bin/next'),'start','--hostname','127.0.0.1','--port','3100'],{stdio:'inherit',env:process.env,windowsHide:true});
 let stopping=false;
 async function stop(){if(stopping)return;stopping=true;if(app.exitCode===null&&app.signalCode===null){const closed=once(app,'close');app.kill();await closed;}await new Promise<void>(done=>smtp.close(()=>done()));await database().end();await db.stop();process.exit(0);}

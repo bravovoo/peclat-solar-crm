@@ -25,7 +25,7 @@ export const recordSchema=z.object({
  person_type:z.enum(['PF','PJ']).default('PF'),document:text(24).transform(v=>v.toUpperCase().replace(/[.\/\-\s]/g,'')).refine(validDocument,'CPF/CNPJ inválido.'),
  phone,whatsapp:phone,email,postal_code:text(10).transform(digits).refine(v=>!v||v.length===8,'CEP inválido.'),
  address:text(),number:text(20),complement:text(120),neighborhood:text(100),city:text(100),state:text(2).transform(v=>v.toUpperCase()).refine(v=>!v||['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].includes(v),'UF inválida.'),
- owner_id:uuid.optional(),source:z.string().trim().min(1).max(60).default('Manual'),campaign:text(120),
+ owner_id:uuid.nullable().optional(),source:z.string().trim().min(1).max(60).default('Manual'),campaign:text(120),
  priority:z.enum(['low','normal','high','urgent']).default('normal'),temperature:z.enum(['cold','warm','hot']).default('warm'),
  stage:z.enum(Object.keys(stages) as [keyof typeof stages,...(keyof typeof stages)[]]).default('new'),
  potential_value:z.coerce.number().min(0).max(99999999999.99).default(0),
@@ -39,8 +39,8 @@ export const recordSchema=z.object({
 export type RecordInput=z.input<typeof recordSchema>;
 export type RecordData=z.output<typeof recordSchema>;
 export type Tag={id:string;name:string;color:string};
-export type CommercialRecord=Omit<RecordData,'tag_ids'|'allow_duplicate'|'owner_id'|'version'> & {id:string;kind:Kind;owner_id:string;owner_name:string;status:keyof typeof statuses;is_demo:boolean;version:number;original_lead_id:string|null;converted_customer_id?:string|null;created_at:string;updated_at:string;tags:Tag[]};
-export const filterSchema=z.object({q:z.string().trim().max(120).default(''),page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(20),sort:z.enum(['newest','oldest','name','value']).default('newest'),owner:uuid.optional(),source:text(60),stage:text(40),temperature:text(10),priority:text(10),city:text(100),state:text(2),person_type:text(2),tag:uuid.optional(),from:z.iso.date().optional(),to:z.iso.date().optional(),status:z.enum(['active','archived','converted','all']).default('active')}).superRefine((v,c)=>{if(v.from&&v.to&&v.from>v.to)c.addIssue({code:'custom',message:'Período inválido.'});});
+export type CommercialRecord=Omit<RecordData,'tag_ids'|'allow_duplicate'|'owner_id'|'version'> & {id:string;kind:Kind;owner_id:string|null;owner_name:string|null;status:keyof typeof statuses;is_demo:boolean;version:number;original_lead_id:string|null;converted_customer_id?:string|null;created_at:string;updated_at:string;tags:Tag[]};
+export const filterSchema=z.object({q:z.string().trim().max(120).default(''),page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(20),sort:z.enum(['newest','oldest','name','value']).default('newest'),owner:uuid.optional(),team:uuid.optional(),view:z.enum(['mine','team','all','unassigned']).optional(),source:text(60),stage:text(40),temperature:text(10),priority:text(10),city:text(100),state:text(2),person_type:text(2),tag:uuid.optional(),from:z.iso.date().optional(),to:z.iso.date().optional(),status:z.enum(['active','archived','converted','all']).default('active')}).superRefine((v,c)=>{if(v.from&&v.to&&v.from>v.to)c.addIssue({code:'custom',message:'Período inválido.'});});
 export const contactSchema=z.object({record_id:uuid,name:z.string().trim().min(2).max(180),job_title:text(100),phone,whatsapp:phone,email,is_primary:z.boolean().default(false),observations:text(2000)}).strict();
 export const noteSchema=z.object({record_id:uuid,body:z.string().trim().min(1).max(4000)}).strict();
 export const taskSchema=z.object({record_id:uuid,title:z.string().trim().min(2).max(180),due_at:z.iso.datetime({offset:true})}).strict();

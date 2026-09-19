@@ -9,7 +9,7 @@ test('login, navegação, sessão protegida e logout em produção',async({page,
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
   const session=(await context.cookies()).find(c=>c.name==='peclat_session');expect(session?.httpOnly).toBe(true);expect(session?.secure).toBe(true);expect(session?.sameSite).toBe('Lax');
   await page.screenshot({path:'test-results/dashboard-desktop.png',fullPage:true});
-  await page.getByRole('link',{name:'Equipe comercial',exact:true}).click();await expect(page.getByText('admin@e2e.local')).toBeVisible();
+  await page.getByRole('link',{name:'Equipe comercial',exact:true}).click();await expect(page.getByText('admin@e2e.local',{exact:true})).toBeVisible();
   await page.getByRole('link',{name:'Configurações',exact:true}).click();await expect(page.getByText('NÃO CONECTADO')).toBeVisible();
   await page.getByRole('button',{name:'Sair da conta'}).click();await expect(page).toHaveURL(/\/login$/);
   expect((await context.request.get('/api/me')).status()).toBe(401);
