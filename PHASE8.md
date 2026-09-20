@@ -40,6 +40,14 @@ O webhook autenticado também processa `statuses[]` para `sent`, `delivered`, `r
 
 O destinatário, a organização, o Phone Number ID, a WABA e a credencial são resolvidos no servidor pela sessão e pela conversa. `WHATSAPP_ACCESS_TOKEN` permanece somente no runtime. Os testes usam um servidor Meta falso e nunca fazem envio real.
 
+### Validação e encerramento da Fase 8.3
+
+A Fase 8.3 foi validada com 85/85 testes unitários e integrados, incluindo 21 cenários de banco temporário, e 28/28 cenários Playwright. As telas foram conferidas em 390×844 e 1440×900. TypeScript, lint, build Next.js, bundle OpenNext, Wrangler dry-run e `git diff --check` passaram.
+
+A migration `020_whatsapp_outbound.sql` foi aplicada em produção com checksum `2d13aad09f45a1f256270eae394ba06429fd34c4c91de339bedfb2212c316083`. As tabelas envolvidas mantêm RLS ativa, sem `FORCE ROW LEVEL SECURITY`, sem policies e sem privilégios diretos para `PUBLIC`, `anon`, `authenticated` ou `service_role`. O endpoint `/api/health` permaneceu saudável.
+
+Após o deploy automático, um envio real controlado do CRM para o WhatsApp foi recebido pelo destinatário. Os estados **Entregue** e **Lida** foram refletidos no CRM. Uma mensagem inbound posterior voltou para a mesma conversa, renovou a janela de 24 horas e o comando de marcar como lida zerou o contador. Nenhuma falha funcional foi encontrada nessa validação manual. A Fase 8.3 está encerrada.
+
 ## Próximas etapas possíveis
 
 A Fase 8.4 poderá abranger mídia outbound, download de mídia inbound, anexos e administração de modelos. Uma Fase 8.5 futura poderá avaliar automações, distribuição, chatbot, IA e campanhas somente após aprovação explícita. Nenhum desses itens faz parte da Fase 8.3.
