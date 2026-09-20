@@ -28,6 +28,20 @@ const documentUser=(await database().query("INSERT INTO users(email,name,passwor
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'seller' FROM organizations WHERE slug='peclat-solar'",[documentUser.id]);
 const contractUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('contracts@e2e.local','Gestor de contratos',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[contractUser.id]);
+const whatsappUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('whatsapp@e2e.local','Admin WhatsApp E2E',$1) RETURNING id",[hash])).rows[0];
+await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[whatsappUser.id]);
+const whatsappOrganization=(await database().query("SELECT id FROM organizations WHERE slug='peclat-solar'")).rows[0].id;
+const whatsappCustomer=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,whatsapp) VALUES ($1,'customer',$2,'Cliente Inbox E2E','5531991112233') RETURNING id",[whatsappOrganization,whatsappUser.id])).rows[0].id;
+await database().query(`INSERT INTO whatsapp_integrations(organization_id,status,webhook_status,last_event_at,last_event_type,account_name,phone_number_id,business_account_id,display_phone_number,api_version,created_by,updated_by)
+ VALUES ($1,'connected','receiving',now(),'messages.text','Peclat Solar E2E','100000000001','200000000001','+55 31 99999-1234','v99.0',$2,$2)`,[whatsappOrganization,whatsappUser.id]);
+const linkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,unread_count,record_id,link_status,link_source)
+ VALUES ($1,'5531991112233','+5531991112233','Cliente Inbox','Preciso acompanhar meu projeto','text',now(),2,$2,'identified','automatic') RETURNING id`,[whatsappOrganization,whatsappCustomer])).rows[0].id;
+const unlinkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,unread_count,link_status,link_source)
+ VALUES ($1,'5531982223344','+5531982223344','Novo contato','Quero falar com a equipe','text',now()-interval '5 minutes',1,'unidentified','none') RETURNING id`,[whatsappOrganization])).rows[0].id;
+await database().query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,message_type,text_body,sender_wa_id,meta_timestamp,processing_status) VALUES
+ ($1,$2,'wamid.e2e.linked.1','text','Olá, equipe Peclat!','5531991112233',now()-interval '2 minutes','processed'),
+ ($1,$2,'wamid.e2e.linked.2','text','Preciso acompanhar meu projeto','5531991112233',now(),'processed'),
+ ($1,$3,'wamid.e2e.unlinked.1','text','Quero falar com a equipe','5531982223344',now()-interval '5 minutes','processed')`,[whatsappOrganization,linkedConversation,unlinkedConversation]);
 // Contas exclusivas da distribuição: preservam os cenários anteriores e seus limites de login.
 const distributionUsers=[
   ['distribution-admin','Admin distribuição','admin',true],

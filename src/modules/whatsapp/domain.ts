@@ -25,3 +25,6 @@ export function normalizeWhatsAppNumber(value:string):NormalizedWhatsAppNumber{
  }
  return {original,digits,e164:valid?`+${digits}`:null,valid};
 }
+export const whatsappConversationFilters=z.object({q:z.string().trim().max(120).default(''),unread:z.enum(['all','unread']).default('all'),link:z.enum(['all','linked','unlinked']).default('all'),page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(30)});
+export const whatsappLinkInput=z.object({record_id:z.uuid().nullable(),version:z.number().int().positive()}).strict();
+export const whatsappReadInput=z.object({version:z.number().int().positive()}).strict();
