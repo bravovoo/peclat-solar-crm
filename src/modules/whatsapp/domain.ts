@@ -28,6 +28,7 @@ export function normalizeWhatsAppNumber(value:string):NormalizedWhatsAppNumber{
 export const whatsappConversationFilters=z.object({q:z.string().trim().max(120).default(''),unread:z.enum(['all','unread']).default('all'),link:z.enum(['all','linked','unlinked']).default('all'),page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(30)});
 export const whatsappLinkInput=z.object({record_id:z.uuid().nullable(),version:z.number().int().positive()}).strict();
 export const whatsappReadInput=z.object({version:z.number().int().positive()}).strict();
+export const whatsappLeadInput=z.object({name:z.string().trim().min(2,'Informe um nome com pelo menos 2 caracteres.').max(180),email:safeText(254).transform(value=>value.toLowerCase()).refine(value=>!value||z.email().safeParse(value).success,'E-mail inválido.'),notes:safeText(4000),tag_ids:z.array(z.uuid()).max(30).default([])}).strict();
 export const whatsappTextSendInput=z.object({client_request_id:z.uuid(),text:z.string().trim().min(1,'Digite uma mensagem.').max(4096,'A mensagem deve ter no máximo 4.096 caracteres.')}).strict();
 export const whatsappTemplateSendInput=z.object({client_request_id:z.uuid(),template_id:z.uuid(),parameters:z.object({header:z.array(z.string().trim().min(1).max(1024)).max(20).default([]),body:z.array(z.string().trim().min(1).max(1024)).max(50).default([])}).strict()}).strict();
 

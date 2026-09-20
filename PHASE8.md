@@ -48,6 +48,20 @@ A migration `020_whatsapp_outbound.sql` foi aplicada em produção com checksum 
 
 Após o deploy automático, um envio real controlado do CRM para o WhatsApp foi recebido pelo destinatário. Os estados **Entregue** e **Lida** foram refletidos no CRM. Uma mensagem inbound posterior voltou para a mesma conversa, renovou a janela de 24 horas e o comando de marcar como lida zerou o contador. Nenhuma falha funcional foi encontrada nessa validação manual. A Fase 8.3 está encerrada.
 
+## 8.3.1 Criação rápida de Lead pela inbox
+
+Conversas não identificadas oferecem a ação manual **Criar Lead** aos usuários que possuem `whatsapp.use` e acesso comercial (`crm.own` ou `crm.all`). A ação nunca é disparada pelo webhook. O modal sugere o `profile name` recebido da Meta, permite revisar o nome e preencher e-mail, observação e Tags internas do CRM. O telefone é somente leitura na interface e o backend sempre o obtém da conversa, normaliza em E.164 e deriva a organização e o responsável da sessão e das regras de carteira já existentes. A origem do cadastro é registrada como **WhatsApp**.
+
+A Tag interna **WhatsApp** é garantida de forma idempotente por organização e aplicada automaticamente; outras Tags existentes podem ser selecionadas opcionalmente. Essas Tags pertencem exclusivamente ao CRM e não sincronizam etiquetas do aplicativo WhatsApp Business. A criação do Lead, as Tags, o vínculo da conversa, a atividade e a auditoria ocorrem na mesma transação. Qualquer falha desfaz toda a operação, sem Lead órfão ou vínculo parcial.
+
+Antes da criação, o backend procura o telefone em Leads, Clientes, Empresas e contatos relacionados da mesma organização. Uma correspondência oferece o vínculo ao cadastro existente; múltiplas correspondências exigem escolha humana e nenhuma delas é selecionada automaticamente. O bloqueio transacional por organização e o bloqueio da conversa impedem duplicação por clique repetido, retry ou operadores concorrentes. IDs de organização, telefone, destinatário, responsável, WABA, Phone Number ID e credenciais não são aceitos do navegador.
+
+O fluxo mantém mensagens, leitura, janela de 24 horas e estados de entrega. Após a criação, a inbox permanece aberta, exibe **Ver Lead** sem redirecionar automaticamente e preserva o atendimento. Nenhuma migration foi necessária porque Leads, origem, Tags, relacionamento de Tags e vínculo da conversa já existiam.
+
+### Validação da Fase 8.3.1
+
+A etapa foi validada com 86/86 testes unitários e integrados, incluindo banco temporário, isolamento, concorrência e rollback, e 28/28 cenários Playwright. O cenário de inbox cobre criação com nome editado e Tag, telefone somente leitura, origem WhatsApp, vínculo persistente após recarga, abertura do Lead, bloqueio de duplicidade e vínculo ao cadastro existente. A responsividade foi conferida em 390×844 e 1440×900, sem rolagem horizontal indevida. TypeScript, lint, build Next.js, bundle OpenNext, Wrangler dry-run e `git diff --check` passaram.
+
 ## Próximas etapas possíveis
 
 A Fase 8.4 poderá abranger mídia outbound, download de mídia inbound, anexos e administração de modelos. Uma Fase 8.5 futura poderá avaliar automações, distribuição, chatbot, IA e campanhas somente após aprovação explícita. Nenhum desses itens faz parte da Fase 8.3.

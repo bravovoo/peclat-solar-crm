@@ -78,33 +78,34 @@ async function setTags(db:Db,actor:Actor,id:string,ids:string[]){
  await db.query('DELETE FROM crm_record_tags WHERE organization_id=$1 AND record_id=$2',[actor.organizationId,id]);
  for(const tag of unique)await db.query('INSERT INTO crm_record_tags(organization_id,record_id,tag_id) VALUES ($1,$2,$3)',[actor.organizationId,id,tag]);
 }
-export async function saveRecord(actor:Actor,kind:Kind,input:unknown,id?:string){
+export async function saveRecordInTransaction(actor:Actor,kind:Kind,input:unknown,db:Db,id?:string){
  crmAccess(actor);const data=recordSchema.parse(input);
  if(kind==='company'&&data.person_type!=='PJ')throw new AccessError(400,'Empresa deve ser do tipo PJ.');
- return transaction(async db=>{
-  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[actor.organizationId]);
-  const before=id?await getRecord(actor,id,db,true):null;
-  if(before&&before.kind!==kind)throw new AccessError(404,'Cadastro não encontrado.');
-  if(before&&data.version!==before.version)throw new AccessError(409,'Este cadastro foi atualizado por outra pessoa. Recarregue antes de salvar.');
-  const owner=data.owner_id!==undefined?data.owner_id:before?before.owner_id:actor.userId;
-  if(owner===null){if(kind!=='lead'||actor.role==='seller')throw new AccessError(403,'Somente a gestão pode manter leads sem responsável.');}
-  else if(!before||before.owner_id!==owner)await ownerAllowed(actor,owner,db);
-  await duplicates(db,actor,data,before??undefined);
-  const values=fields.map(key=>key==='expected_close'?(data[key]||null):data[key]);
-  let savedId=id;
-  if(before){
-   await db.query(`UPDATE crm_records SET ${fields.map((key,i)=>`${key}=$${i+1}`).join(',')},owner_id=$${values.length+1},version=version+1,updated_at=now() WHERE organization_id=$${values.length+2} AND id=$${values.length+3}`,[...values,owner,actor.organizationId,id]);
-   if(before.stage!==data.stage)await activity(db,actor,id!,'stage.changed',`${before.stage} -> ${data.stage}`);
-   if(before.owner_id!==owner){await activity(db,actor,id!,'owner.changed',`${before.owner_name??'Sem responsável'} -> ${owner??'Sem responsável'}`);await db.query("INSERT INTO audit_logs(organization_id,actor_id,action) VALUES ($1,$2,'commercial.owner.changed')",[actor.organizationId,actor.userId]);}
-   await activity(db,actor,id!,'record.updated','Dados do cadastro atualizados.');
-  }else{
-   const result=await db.query(`INSERT INTO crm_records(${fields.join(',')},organization_id,owner_id,kind) VALUES (${[...values,actor.organizationId,owner,kind].map((_,i)=>`$${i+1}`).join(',')}) RETURNING id`,[...values,actor.organizationId,owner,kind]);savedId=result.rows[0].id;
-   await activity(db,actor,savedId!,'record.created','Cadastro criado.');
-  }
-  await setTags(db,actor,savedId!,data.tag_ids);
-  if(data.allow_duplicate)await activity(db,actor,savedId!,'duplicate.confirmed','Possível duplicidade confirmada por usuário autorizado.');
-  return getRecord(actor,savedId!,db);
- });
+ await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[actor.organizationId]);
+ const before=id?await getRecord(actor,id,db,true):null;
+ if(before&&before.kind!==kind)throw new AccessError(404,'Cadastro não encontrado.');
+ if(before&&data.version!==before.version)throw new AccessError(409,'Este cadastro foi atualizado por outra pessoa. Recarregue antes de salvar.');
+ const owner=data.owner_id!==undefined?data.owner_id:before?before.owner_id:actor.userId;
+ if(owner===null){if(kind!=='lead'||actor.role==='seller')throw new AccessError(403,'Somente a gestão pode manter leads sem responsável.');}
+ else if(!before||before.owner_id!==owner)await ownerAllowed(actor,owner,db);
+ await duplicates(db,actor,data,before??undefined);
+ const values=fields.map(key=>key==='expected_close'?(data[key]||null):data[key]);
+ let savedId=id;
+ if(before){
+  await db.query(`UPDATE crm_records SET ${fields.map((key,i)=>`${key}=$${i+1}`).join(',')},owner_id=$${values.length+1},version=version+1,updated_at=now() WHERE organization_id=$${values.length+2} AND id=$${values.length+3}`,[...values,owner,actor.organizationId,id]);
+  if(before.stage!==data.stage)await activity(db,actor,id!,'stage.changed',`${before.stage} -> ${data.stage}`);
+  if(before.owner_id!==owner){await activity(db,actor,id!,'owner.changed',`${before.owner_name??'Sem responsável'} -> ${owner??'Sem responsável'}`);await db.query("INSERT INTO audit_logs(organization_id,actor_id,action) VALUES ($1,$2,'commercial.owner.changed')",[actor.organizationId,actor.userId]);}
+  await activity(db,actor,id!,'record.updated','Dados do cadastro atualizados.');
+ }else{
+  const result=await db.query(`INSERT INTO crm_records(${fields.join(',')},organization_id,owner_id,kind) VALUES (${[...values,actor.organizationId,owner,kind].map((_,i)=>`$${i+1}`).join(',')}) RETURNING id`,[...values,actor.organizationId,owner,kind]);savedId=result.rows[0].id;
+  await activity(db,actor,savedId!,'record.created','Cadastro criado.');
+ }
+ await setTags(db,actor,savedId!,data.tag_ids);
+ if(data.allow_duplicate)await activity(db,actor,savedId!,'duplicate.confirmed','Possível duplicidade confirmada por usuário autorizado.');
+ return getRecord(actor,savedId!,db);
+}
+export async function saveRecord(actor:Actor,kind:Kind,input:unknown,id?:string){
+ return transaction(db=>saveRecordInTransaction(actor,kind,input,db,id));
 }
 export async function recordAction(actor:Actor,id:string,action:'archive'|'restore'|'delete'|'convert',version:number){
  crmAccess(actor);if(action==='delete')requirePermission(actor,'crm.delete');

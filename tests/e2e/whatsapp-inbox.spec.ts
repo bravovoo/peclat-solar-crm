@@ -41,9 +41,9 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect(page.getByTestId('message-composer')).toBeVisible();
  const layoutBox=await layout.boundingBox();
  expect(layoutBox?.height).toBeLessThanOrEqual(760);
+ await expect.poll(async()=>(await scrollMetrics(page,'message-history')).distance).toBeLessThanOrEqual(4);
  const initialHistory=await scrollMetrics(page,'message-history');
  expect(initialHistory.scrollHeight).toBeGreaterThan(initialHistory.clientHeight);
- expect(initialHistory.distance).toBeLessThanOrEqual(4);
  const initialList=await scrollMetrics(page,'conversation-list');
  expect(initialList.scrollHeight).toBeGreaterThan(initialList.clientHeight);
 
@@ -73,6 +73,19 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect(page.getByText(/Janela de atendimento encerrada/)).toBeVisible();
  const shortHistory=await scrollMetrics(page,'message-history');
  expect(shortHistory.scrollHeight-shortHistory.clientHeight).toBeLessThanOrEqual(4);
+ await page.getByRole('button',{name:'Criar Lead',exact:true}).click();
+ const leadDialog=page.getByRole('dialog',{name:'Criar Lead pelo WhatsApp'});
+ await expect(leadDialog.getByLabel('Nome *')).toHaveValue('Novo contato');
+ await expect(leadDialog.getByLabel('Telefone da conversa')).toHaveValue('+5531982223344');
+ await expect(leadDialog.getByLabel('Telefone da conversa')).not.toBeEditable();
+ await expect(leadDialog.getByLabel('Origem')).toHaveValue('WhatsApp');
+ await leadDialog.getByLabel('Nome *').fill('Lead Inbox E2E');
+ await leadDialog.getByLabel('Residencial E2E').check();
+ await leadDialog.getByLabel('Observação').fill('Criado manualmente pela inbox.');
+ await leadDialog.getByRole('button',{name:'Criar Lead',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('Lead criado e conversa vinculada');
+ await expect(page.getByRole('link',{name:'Ver Lead'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Criar Lead',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:/Sincronizar modelos/}).click();
  await expect(page.getByRole('status')).toContainText('Modelos aprovados');
  await page.getByLabel('Selecionar modelo aprovado').selectOption({label:'retomar_atendimento · pt_BR'});
@@ -80,13 +93,23 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await page.getByRole('button',{name:'Enviar modelo'}).click();
  await expect(page.getByRole('status')).toContainText('Modelo enviado');
  await expect(page.getByText('Olá João, podemos continuar seu atendimento?',{exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Vincular ao CRM'}).click();
- const dialog=page.getByRole('dialog',{name:'Vincular conversa ao CRM'});
- await dialog.getByLabel('Buscar cadastro existente').fill('Cliente Inbox');
- await dialog.getByRole('button',{name:'Buscar'}).click();
- await dialog.getByRole('button',{name:/Cliente Inbox E2E/}).click();
+ await page.reload();
+ await page.getByLabel('Buscar conversas').fill('5531982223344');
+ await page.getByRole('button',{name:'Aplicar filtros'}).click();
+ await page.getByRole('button',{name:/Lead Inbox E2E/}).click();
+ await expect(page.getByRole('link',{name:'Ver Lead'})).toBeVisible();
+
+ await page.getByLabel('Buscar conversas').fill('5531983334455');
+ await page.getByLabel('Filtrar vínculo').selectOption('unlinked');
+ await page.getByRole('button',{name:'Aplicar filtros'}).click();
+ await page.getByRole('button',{name:/Cadastro duplicado/}).click();
+ await page.getByRole('button',{name:'Criar Lead',exact:true}).click();
+ const duplicateDialog=page.getByRole('dialog',{name:'Criar Lead pelo WhatsApp'});
+ await duplicateDialog.getByRole('button',{name:'Criar Lead',exact:true}).click();
+ await expect(duplicateDialog.getByRole('alert')).toContainText('já pertence a um cadastro existente');
+ await duplicateDialog.getByRole('button',{name:/Vincular a Cliente duplicidade E2E/}).click();
  await expect(page.getByRole('status')).toContainText('vinculada ao CRM');
- await expect(page.getByRole('link',{name:'Abrir cadastro no CRM'})).toBeVisible();
+ await expect(page.getByRole('link',{name:'Ver Cliente'})).toBeVisible();
 
  for(const size of [{width:390,height:844},{width:1440,height:900}]){
   await page.setViewportSize(size);
@@ -99,8 +122,14 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
   await page.screenshot({path:`test-results/whatsapp-inbox-${size.width}.png`,fullPage:false});
  }
 
- await page.getByRole('link',{name:'Abrir cadastro no CRM'}).click();
- await expect(page.getByRole('heading',{name:'Cliente Inbox E2E'})).toBeVisible();
+ await page.getByLabel('Buscar conversas').fill('5531982223344');
+ await page.getByLabel('Filtrar vínculo').selectOption('all');
+ await page.getByRole('button',{name:'Aplicar filtros'}).click();
+ await page.getByRole('button',{name:/Lead Inbox E2E/}).click();
+ await page.getByRole('link',{name:'Ver Lead'}).click();
+ await expect(page.getByRole('heading',{name:'Lead Inbox E2E'})).toBeVisible();
  await expect(page.getByRole('heading',{name:'Conversas no WhatsApp'})).toBeVisible();
+ await expect(page.locator('.crm-tag').filter({hasText:/^WhatsApp$/})).toBeVisible();
+ await expect(page.locator('.crm-tag').filter({hasText:/^Residencial E2E$/})).toBeVisible();
  await expect(page.getByText(/Olá João, podemos continuar seu atendimento/)).toBeVisible();
 });
