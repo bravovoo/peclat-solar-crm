@@ -2,6 +2,7 @@ import EmbeddedPostgres from './embedded-db';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
+import {createServer as createHttpServer} from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { migrate } from './migrate';
@@ -16,6 +17,8 @@ const db=new EmbeddedPostgres({databaseDir:dir,user:'e2e',password:'e2e_database
 await db.initialise();await db.start();await db.createDatabase('peclat_e2e');
 process.env.DATABASE_URL=`postgresql://e2e:e2e_database_only@127.0.0.1:${port}/peclat_e2e`;
 process.env.APP_URL='http://localhost:3100';process.env.SEED_ADMIN_EMAIL='admin@e2e.local';process.env.SEED_ADMIN_PASSWORD='Peclat teste seguro 2026';process.env.SEED_ADMIN_NAME='Admin de teste';
+const meta=createHttpServer((request,response)=>{response.setHeader('content-type','application/json');if(request.method==='GET'&&request.url?.includes('/message_templates'))response.end(JSON.stringify({data:[{id:'template-e2e',name:'retomar_atendimento',language:'pt_BR',category:'UTILITY',status:'APPROVED',components:[{type:'BODY',text:'Olá {{1}}, podemos continuar seu atendimento?'}]}]}));else if(request.method==='POST'&&request.url?.endsWith('/messages')){request.resume();response.end(JSON.stringify({messages:[{id:`wamid.e2e.outbound.${Date.now()}`}]}));}else{response.statusCode=404;response.end(JSON.stringify({error:{message:'not found'}}));}});
+const metaPort=await new Promise<number>(done=>meta.listen(0,'127.0.0.1',()=>{const address=meta.address();if(address&&typeof address==='object')done(address.port);}));process.env.WHATSAPP_ACCESS_TOKEN='e2e-fake-token';process.env.WHATSAPP_APP_SECRET='e2e-fake-app-secret';process.env.WHATSAPP_META_TEST_MODE='true';process.env.WHATSAPP_GRAPH_API_BASE_URL=`http://127.0.0.1:${metaPort}`;
 const smtp=createServer(socket=>{socket.setEncoding('utf8');socket.write('220 localhost ESMTP\r\n');let buffer='',readingData=false;function process(){if(readingData){const end=buffer.indexOf('\r\n.\r\n');if(end<0)return;buffer=buffer.slice(end+5);readingData=false;socket.write('250 2.0.0 queued\r\n');}let newline;while((newline=buffer.indexOf('\r\n'))>=0){const line=buffer.slice(0,newline);buffer=buffer.slice(newline+2);const command=line.toUpperCase();if(command.startsWith('EHLO'))socket.write('250-localhost\r\n250 SIZE 15728640\r\n');else if(command.startsWith('HELO')||command.startsWith('MAIL FROM')||command.startsWith('RCPT TO')||command==='RSET'||command==='NOOP')socket.write('250 2.0.0 ok\r\n');else if(command==='DATA'){readingData=true;socket.write('354 End data with <CR><LF>.<CR><LF>\r\n');return;}else if(command==='QUIT'){socket.write('221 2.0.0 bye\r\n');socket.end();return;}else socket.write('250 2.0.0 ok\r\n');}}socket.on('data',chunk=>{buffer+=chunk;process();});});
 const smtpPort=await new Promise<number>(done=>smtp.listen(0,'127.0.0.1',()=>{const address=smtp.address();if(address&&typeof address==='object')done(address.port);}));process.env.SMTP_HOST='127.0.0.1';process.env.SMTP_PORT=String(smtpPort);
 await migrate();await seed();
@@ -34,10 +37,10 @@ const whatsappOrganization=(await database().query("SELECT id FROM organizations
 const whatsappCustomer=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,whatsapp) VALUES ($1,'customer',$2,'Cliente Inbox E2E','5531991112233') RETURNING id",[whatsappOrganization,whatsappUser.id])).rows[0].id;
 await database().query(`INSERT INTO whatsapp_integrations(organization_id,status,webhook_status,last_event_at,last_event_type,account_name,phone_number_id,business_account_id,display_phone_number,api_version,created_by,updated_by)
  VALUES ($1,'connected','receiving',now(),'messages.text','Peclat Solar E2E','100000000001','200000000001','+55 31 99999-1234','v99.0',$2,$2)`,[whatsappOrganization,whatsappUser.id]);
-const linkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,unread_count,record_id,link_status,link_source)
- VALUES ($1,'5531991112233','+5531991112233','Cliente Inbox','Preciso acompanhar meu projeto','text',now(),2,$2,'identified','automatic') RETURNING id`,[whatsappOrganization,whatsappCustomer])).rows[0].id;
-const unlinkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,unread_count,link_status,link_source)
- VALUES ($1,'5531982223344','+5531982223344','Novo contato','Quero falar com a equipe','text',now()-interval '5 minutes',1,'unidentified','none') RETURNING id`,[whatsappOrganization])).rows[0].id;
+const linkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,last_inbound_at,unread_count,record_id,link_status,link_source)
+ VALUES ($1,'5531991112233','+5531991112233','Cliente Inbox','Preciso acompanhar meu projeto','text',now(),now(),2,$2,'identified','automatic') RETURNING id`,[whatsappOrganization,whatsappCustomer])).rows[0].id;
+const unlinkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,last_inbound_at,unread_count,link_status,link_source)
+ VALUES ($1,'5531982223344','+5531982223344','Novo contato','Quero falar com a equipe','text',now()-interval '25 hours',now()-interval '25 hours',1,'unidentified','none') RETURNING id`,[whatsappOrganization])).rows[0].id;
 await database().query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,message_type,text_body,sender_wa_id,meta_timestamp,processing_status) VALUES
  ($1,$2,'wamid.e2e.linked.1','text','Olá, equipe Peclat!','5531991112233',now()-interval '2 minutes','processed'),
  ($1,$2,'wamid.e2e.linked.2','text','Preciso acompanhar meu projeto','5531991112233',now(),'processed'),
@@ -65,5 +68,5 @@ for(const [email,name,role,active] of distributionUsers){
 }
 const app=spawn(process.execPath,[resolve('node_modules/next/dist/bin/next'),'start','--hostname','127.0.0.1','--port','3100'],{stdio:'inherit',env:process.env,windowsHide:true});
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;if(app.exitCode===null&&app.signalCode===null){const closed=once(app,'close');app.kill();await closed;}await new Promise<void>(done=>smtp.close(()=>done()));await database().end();await db.stop();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;if(app.exitCode===null&&app.signalCode===null){const closed=once(app,'close');app.kill();await closed;}await Promise.all([new Promise<void>(done=>smtp.close(()=>done())),new Promise<void>(done=>meta.close(()=>done()))]);await database().end();await db.stop();process.exit(0);}
 process.once('SIGTERM',stop);process.once('SIGINT',stop);app.once('exit',stop);

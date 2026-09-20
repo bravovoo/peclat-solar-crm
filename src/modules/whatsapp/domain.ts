@@ -28,3 +28,11 @@ export function normalizeWhatsAppNumber(value:string):NormalizedWhatsAppNumber{
 export const whatsappConversationFilters=z.object({q:z.string().trim().max(120).default(''),unread:z.enum(['all','unread']).default('all'),link:z.enum(['all','linked','unlinked']).default('all'),page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(30)});
 export const whatsappLinkInput=z.object({record_id:z.uuid().nullable(),version:z.number().int().positive()}).strict();
 export const whatsappReadInput=z.object({version:z.number().int().positive()}).strict();
+export const whatsappTextSendInput=z.object({client_request_id:z.uuid(),text:z.string().trim().min(1,'Digite uma mensagem.').max(4096,'A mensagem deve ter no máximo 4.096 caracteres.')}).strict();
+export const whatsappTemplateSendInput=z.object({client_request_id:z.uuid(),template_id:z.uuid(),parameters:z.object({header:z.array(z.string().trim().min(1).max(1024)).max(20).default([]),body:z.array(z.string().trim().min(1).max(1024)).max(50).default([])}).strict()}).strict();
+
+export type WhatsAppWindow={open:boolean;last_inbound_at:string|null;closes_at:string|null;server_now:string};
+export function serviceWindow(lastInbound:Date|null,now=new Date()):WhatsAppWindow{
+ const closes=lastInbound?new Date(lastInbound.getTime()+24*60*60*1000):null;
+ return {open:Boolean(closes&&closes.getTime()>now.getTime()),last_inbound_at:lastInbound?.toISOString()??null,closes_at:closes?.toISOString()??null,server_now:now.toISOString()};
+}
