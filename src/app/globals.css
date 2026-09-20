@@ -161,3 +161,23 @@
 @media(max-width:640px){.whatsapp-filters .crm-field,.whatsapp-filters .crm-field:first-child,.whatsapp-filters .button{flex-basis:100%;width:100%}.whatsapp-layout{gap:13px;min-height:0}.whatsapp-list{max-height:330px}.whatsapp-detail-header{padding:14px}.whatsapp-detail-header .user-actions,.whatsapp-detail-header .button{width:100%}.whatsapp-messages{padding:14px;min-height:280px}.whatsapp-message{max-width:94%}.record-whatsapp-summary>a{align-items:flex-start;flex-direction:column;gap:5px}.record-whatsapp-summary>a b{white-space:normal}}
 .whatsapp-message footer{display:flex;align-items:center;justify-content:flex-end;gap:7px;color:var(--muted);font-size:9px;margin-top:7px;flex-wrap:wrap}.whatsapp-message footer time{display:inline;margin:0}.whatsapp-message.outbound{align-self:flex-end;background:#e8f5ef;border-color:#b9ddce;border-radius:13px 4px 13px 13px}.whatsapp-delivery{display:inline-flex;align-items:center;gap:3px;color:#557169}.whatsapp-delivery.read{color:#1676a8}.whatsapp-delivery.failed{color:var(--danger)}.whatsapp-delivery.warning{color:#94620c}.whatsapp-composer{padding:14px 18px;border-top:1px solid var(--line);background:#fff}.whatsapp-composer .crm-field{margin:10px 0}.whatsapp-window{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700}.whatsapp-window.open{color:#287255}.whatsapp-window.closed{color:#94620c}.whatsapp-compose-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px}.whatsapp-compose-actions small{color:var(--muted)}.whatsapp-template-heading{display:flex;align-items:end;gap:10px}.whatsapp-template-heading .crm-field{flex:1}.whatsapp-template-preview{font-size:12px;line-height:1.55;background:#f4f7f6;border:1px solid var(--line);border-radius:8px;padding:9px 11px;white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:640px){.whatsapp-composer{padding:13px 14px}.whatsapp-template-heading{align-items:stretch;flex-direction:column}.whatsapp-template-heading .button,.whatsapp-compose-actions .button{width:100%}.whatsapp-compose-actions{align-items:stretch;flex-direction:column}}
+
+/* Inbox com altura estável e rolagem independente — FASE 8.3 */
+.whatsapp-inbox{display:flex;min-height:0;flex-direction:column}
+.whatsapp-layout{height:clamp(500px,calc(100dvh - 380px),760px);min-height:0}
+.whatsapp-list,.whatsapp-detail{display:flex;min-height:0;flex-direction:column}
+.whatsapp-list .card-heading,.whatsapp-detail-header{flex:0 0 auto}
+.whatsapp-conversation-scroll{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.whatsapp-messages-shell{position:relative;min-height:0;flex:1;overflow:hidden;background:#f6f8f7}
+.whatsapp-messages{height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.whatsapp-message{width:fit-content;min-width:108px;max-width:min(72%,680px)}
+.whatsapp-message.reaction{min-width:0;padding:7px 10px}
+.whatsapp-reaction{display:flex;align-items:center;gap:7px;line-height:1}
+.whatsapp-reaction>span{font-size:21px}
+.whatsapp-reaction small{color:var(--muted);font-size:10px;white-space:nowrap}
+.whatsapp-message.reaction footer{margin-top:4px}
+.whatsapp-new-messages{position:absolute;right:18px;bottom:14px;z-index:2;border:1px solid #b9ddce;border-radius:999px;background:#fff;color:#216b52;box-shadow:0 5px 18px #173d5826;padding:8px 13px;font-size:12px;font-weight:700}
+.whatsapp-new-messages:hover{background:#eef8f3}
+.whatsapp-composer{flex:0 0 auto;max-height:48%;overflow-y:auto}
+@media(max-width:900px){.whatsapp-layout{height:auto;max-height:none}.whatsapp-list{height:clamp(220px,36dvh,380px);max-height:none;overflow:hidden}.whatsapp-detail{height:clamp(540px,calc(100dvh - 92px),720px)}.whatsapp-message{max-width:88%}}
+@media(max-width:640px){.whatsapp-list{height:clamp(220px,34dvh,330px);max-height:none}.whatsapp-detail{height:calc(100dvh - 82px);min-height:560px}.whatsapp-messages{min-height:0}.whatsapp-message{max-width:94%;min-width:92px}.whatsapp-message.reaction{min-width:0}.whatsapp-new-messages{right:12px;bottom:11px}.whatsapp-composer{max-height:55%}}

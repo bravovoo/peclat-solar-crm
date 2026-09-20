@@ -45,6 +45,12 @@ await database().query(`INSERT INTO whatsapp_messages(organization_id,conversati
  ($1,$2,'wamid.e2e.linked.1','text','Olá, equipe Peclat!','5531991112233',now()-interval '2 minutes','processed'),
  ($1,$2,'wamid.e2e.linked.2','text','Preciso acompanhar meu projeto','5531991112233',now(),'processed'),
  ($1,$3,'wamid.e2e.unlinked.1','text','Quero falar com a equipe','5531982223344',now()-interval '5 minutes','processed')`,[whatsappOrganization,linkedConversation,unlinkedConversation]);
+await database().query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,message_type,text_body,sender_wa_id,meta_timestamp,processing_status)
+ SELECT $1,$2,'wamid.e2e.history.'||item,'text','Mensagem histórica de teste '||item,'5531991112233',now()-interval '90 minutes'+item*interval '1 minute','processed'
+ FROM generate_series(1,75) item`,[whatsappOrganization,linkedConversation]);
+await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,last_inbound_at,unread_count,link_status,link_source)
+ SELECT $1,'553197'||lpad(item::text,8,'0'),'+553197'||lpad(item::text,8,'0'),'Contato de teste '||item,'Conversa para validar a rolagem da lista','text',now()-(30+item)*interval '1 hour',now()-(30+item)*interval '1 hour',0,'unidentified','none'
+ FROM generate_series(1,28) item`,[whatsappOrganization]);
 // Contas exclusivas da distribuição: preservam os cenários anteriores e seus limites de login.
 const distributionUsers=[
   ['distribution-admin','Admin distribuição','admin',true],
