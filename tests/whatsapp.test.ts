@@ -1,8 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {serviceWindow,whatsappTemplateSendInput,whatsappTextSendInput} from '../src/modules/whatsapp/domain';
-import {fetchMetaTemplates,MetaSendError,sendMetaMessage,type MetaConfiguration} from '../src/modules/whatsapp/meta';
+import {fetchMetaMedia,fetchMetaTemplates,MetaSendError,sendMetaMessage,uploadMetaMedia,type MetaConfiguration} from '../src/modules/whatsapp/meta';
 import {templateSupport} from '../src/modules/whatsapp/outbound';
+import {prepareWhatsAppMedia} from '../src/modules/whatsapp/media';
 const config:MetaConfiguration={apiVersion:'v99.0',phoneNumberId:'123',businessAccountId:'456',accessToken:'segredo-de-teste'};
 test('janela de atendimento usa limite estrito de 24 horas',()=>{const now=new Date('2026-09-19T12:00:00Z');assert.equal(serviceWindow(new Date('2026-09-18T12:01:00Z'),now).open,true);assert.equal(serviceWindow(new Date('2026-09-18T12:00:00Z'),now).open,false);assert.equal(serviceWindow(new Date('2026-09-18T11:59:59Z'),now).open,false);assert.equal(serviceWindow(null,now).open,false);});
 test('payloads outbound exigem UUID, texto e parâmetros limitados',()=>{assert.equal(whatsappTextSendInput.safeParse({client_request_id:crypto.randomUUID(),text:'Olá'}).success,true);assert.equal(whatsappTextSendInput.safeParse({client_request_id:crypto.randomUUID(),text:''}).success,false);assert.equal(whatsappTextSendInput.safeParse({client_request_id:crypto.randomUUID(),text:'x'.repeat(4097)}).success,false);assert.equal(whatsappTemplateSendInput.safeParse({client_request_id:'spoof',template_id:'x',parameters:{header:[],body:[]}}).success,false);});
@@ -10,3 +11,24 @@ test('cliente Meta monta endpoint oficial sem expor token no payload',async()=>{
 test('cliente Meta diferencia recusa de resultado ambíguo e nunca repete POST',async()=>{let calls=0;await assert.rejects(()=>sendMetaMessage(config,{type:'text'},async()=>{calls++;return new Response(JSON.stringify({error:{code:131047,message:'Fora da janela'}}),{status:400});}),error=>error instanceof MetaSendError&&error.kind==='rejected');assert.equal(calls,1);await assert.rejects(()=>sendMetaMessage(config,{type:'text'},async()=>{calls++;throw new Error('socket');}),error=>error instanceof MetaSendError&&error.kind==='uncertain');assert.equal(calls,2);await assert.rejects(()=>sendMetaMessage(config,{type:'text'},async()=>new Response('{}',{status:200})),error=>error instanceof MetaSendError&&error.kind==='uncertain');});
 test('Meta 401 e 429 são recusas; 500 tem resultado incerto e nenhum caso repete o POST',async()=>{for(const [status,kind] of [[401,'rejected'],[429,'rejected'],[500,'uncertain']] as const){let calls=0;await assert.rejects(()=>sendMetaMessage(config,{type:'text'},async()=>{calls++;return new Response(JSON.stringify({error:{message:'Resposta de teste'}}),{status});}),error=>error instanceof MetaSendError&&error.kind===kind);assert.equal(calls,1);}});
 test('sincronização Meta lê catálogo e classifica componentes suportados',async()=>{const templates=await fetchMetaTemplates(config,async()=>new Response(JSON.stringify({data:[{id:'1',name:'simples',language:'pt_BR',category:'UTILITY',status:'APPROVED',components:[{type:'BODY',text:'Olá {{1}}'}]}]}),{status:200,headers:{'content-type':'application/json'}}));assert.equal(templates.length,1);assert.equal(templateSupport(templates[0]).supported,true);assert.equal(templateSupport({components:[{type:'HEADER',format:'IMAGE'}]}).supported,false);assert.equal(templateSupport({components:[{type:'BUTTONS'}]}).supported,false);});
+test('anexo valida tipo, assinatura, limite e calcula hash',async()=>{
+ const png=new File([Uint8Array.from([137,80,78,71,13,10,26,10,1])],'painel.png',{type:'image/png'}),ready=await prepareWhatsAppMedia(png,'Painel');assert.equal(ready.kind,'image');assert.equal(ready.sha256.length,64);assert.equal(ready.caption,'Painel');
+ await assert.rejects(()=>prepareWhatsAppMedia(new File(['falso'],'falso.png',{type:'image/png'}),''),{status:415});
+ await assert.rejects(()=>prepareWhatsAppMedia(new File(['<svg/>'],'x.svg',{type:'image/svg+xml'}),''),{status:415});
+ await assert.rejects(()=>prepareWhatsAppMedia(new File([Uint8Array.from([37,80,68,70,45])],'falso.jpg',{type:'application/pdf'}),''),{status:415});
+ await assert.rejects(()=>prepareWhatsAppMedia(new File([new Uint8Array(5*1024*1024+1)],'grande.png',{type:'image/png'}),''),{status:413});
+ await assert.rejects(()=>prepareWhatsAppMedia(png,'x'.repeat(2001)),{status:400});
+});
+test('upload Meta envia multipart com token somente no servidor',async()=>{const png=new File([Uint8Array.from([137,80,78,71,13,10,26,10])],'painel.png',{type:'image/png'});const id=await uploadMetaMedia(config,png,async(input,init)=>{assert.match(input,/\/123\/media$/);assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer segredo-de-teste');assert.equal((init?.body as FormData).get('messaging_product'),'whatsapp');assert.equal((init?.body as FormData).get('type'),'image/png');return new Response(JSON.stringify({id:'media-123'}));});assert.equal(id,'media-123');});
+test('proxy Meta não segue URL externa ou redirecionamento e repassa Range',async()=>{
+ await assert.rejects(()=>fetchMetaMedia(config,'media-1',null,async()=>new Response(JSON.stringify({url:'https://evil.example/arquivo'}))),{status:502});
+ let calls=0;const response=await fetchMetaMedia(config,'media-1','bytes=0-2',async(input,init)=>{calls++;if(calls===1){assert.match(input,/phone_number_id=123/);return new Response(JSON.stringify({url:'https://lookaside.fbsbx.com/whatsapp_business/attachments/safe',mime_type:'audio/ogg',file_size:3}));}assert.equal((init?.headers as Record<string,string>).Range,'bytes=0-2');assert.equal(init?.redirect,'manual');return new Response('abc',{status:206,headers:{'content-range':'bytes 0-2/3'}});});assert.equal(response.response.status,206);assert.equal(response.mimeType,'audio/ogg');
+ await assert.rejects(()=>fetchMetaMedia(config,'../secrets',null,async()=>{throw new Error('não deveria chamar');}),{status:404});
+});
+test('mídia expirada e recusas 401/429/500 da Meta devolvem erro seguro',async()=>{
+ for(const status of [401,404,429,500])await assert.rejects(()=>fetchMetaMedia(config,'media-1',null,async()=>new Response('{}',{status})),{status:404});
+ for(const status of [401,429,500]){let calls=0;await assert.rejects(()=>fetchMetaMedia(config,'media-1',null,async()=>{calls++;return calls===1?new Response(JSON.stringify({url:'https://lookaside.fbsbx.com/whatsapp_business/attachments/safe'})):new Response('',{status});}),{status:502});}
+ await assert.rejects(()=>fetchMetaMedia(config,'media-1',null,async()=>{throw new Error('token secreto');}),{status:502});
+ for(const status of [400,401,403,429,500])await assert.rejects(()=>uploadMetaMedia(config,new File(['%PDF-1.4'],'a.pdf',{type:'application/pdf'}),async()=>new Response('{}',{status})),{status:502});
+ await assert.rejects(()=>uploadMetaMedia(config,new File(['%PDF-1.4'],'a.pdf',{type:'application/pdf'}),async()=>{throw new Error('token secreto');}),{status:502});
+});

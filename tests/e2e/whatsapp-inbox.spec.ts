@@ -1,4 +1,4 @@
-import {test,expect,type Page} from '@playwright/test';
+import {test,expect,request as playwrightRequest,type Page} from '@playwright/test';
 import {createHmac} from 'node:crypto';
 
 const password='Peclat teste seguro 2026';
@@ -35,6 +35,20 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect(page.getByRole('button',{name:/Marcar como lida/})).toBeVisible();
  await expect(page.getByText(/Janela aberta até/)).toBeVisible();
  await expect(page.getByTestId('contact-info')).toBeVisible();
+ const audio=page.getByTestId('message-history').locator('audio');await expect(audio).toHaveCount(1);
+ const audioUrl=await audio.getAttribute('src');expect(audioUrl).toMatch(/\/api\/whatsapp\/conversations\/[^/]+\/messages\/[^/]+\/media/);
+ expect((await page.request.get(audioUrl!)).status()).toBe(200);
+ const anonymous=await playwrightRequest.newContext({baseURL:'http://localhost:3100'});expect((await anonymous.get(audioUrl!)).status()).toBe(401);await anonymous.dispose();
+ const partial=await page.request.get(audioUrl!,{headers:{range:'bytes=0-2'}});expect(partial.status()).toBe(206);expect(partial.headers()['content-range']).toBe('bytes 0-2/8');
+ await expect(page.getByRole('link',{name:'fatura.pdf'})).toHaveCount(1);
+ const pdfUrl=await page.getByRole('link',{name:'fatura.pdf'}).getAttribute('href');const pdf=await page.request.get(pdfUrl!);expect(pdf.status()).toBe(200);expect(pdf.headers()['content-disposition']).toContain('attachment');
+ await expect(page.getByRole('img',{name:'Painel instalado'})).toHaveCount(1);
+ await expect(page.getByRole('link',{name:'Ampliar imagem'})).toHaveCount(1);
+ const conversationId=audioUrl!.split('/')[4],detailResponse=await page.request.get(`/api/whatsapp/conversations/${conversationId}`),detailJson=await detailResponse.json() as {messages:{id:string;media_id:string}[]};
+ const expired=detailJson.messages.find(message=>message.media_id==='e2e-expired');expect(expired).toBeTruthy();
+ expect((await page.request.get(`/api/whatsapp/conversations/${conversationId}/messages/${expired!.id}/media`)).status()).toBe(404);
+ const expiredBubble=page.locator(`[data-message-id="${expired!.id}"]`);await expiredBubble.scrollIntoViewIfNeeded();await expect(expiredBubble.getByText('Mídia não está mais disponível.')).toBeVisible();
+ await page.getByTestId('message-history').evaluate(element=>element.scrollTo({top:element.scrollHeight}));
 
  const layout=page.getByTestId('whatsapp-layout');
  const history=page.getByTestId('message-history');
@@ -53,6 +67,12 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect(page.getByTestId('conversation-list')).toBeVisible();
  await page.getByRole('button',{name:/Cliente Inbox E2E/}).click();
  await expect(page.getByTestId('message-composer')).toBeVisible();
+ await expect(page.getByTestId('message-history').locator('audio')).toHaveCount(1);
+ await expect(page.getByRole('link',{name:'fatura.pdf'})).toHaveCount(1);
+ await page.getByLabel('Anexar imagem ou PDF').setInputFiles({name:'painel.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL1GQAAAABJRU5ErkJggg==','base64')});
+ await expect(page.getByRole('img',{name:'Prévia do anexo'})).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+ await page.getByRole('button',{name:'Remover anexo'}).click();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
  await page.getByRole('button',{name:'Informações do contato'}).click();
  await expect(page.getByTestId('contact-info')).toBeVisible();
  await page.getByRole('button',{name:'Fechar informações'}).first().click();
@@ -75,6 +95,18 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect(page.getByRole('status')).toContainText('Mensagem enviada');
  await expect(history.getByText('Resposta outbound E2E',{exact:true})).toBeVisible();
  await expect(page.getByText('Enviada',{exact:true})).toBeVisible();
+ await page.getByLabel('Anexar imagem ou PDF').setInputFiles({name:'painel.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL1GQAAAABJRU5ErkJggg==','base64')});
+ await expect(page.getByRole('img',{name:'Prévia do anexo'})).toBeVisible();
+ await page.getByLabel('Legenda do anexo').fill('Painel enviado no teste');
+ await page.getByRole('button',{name:'Enviar anexo'}).click();
+ await expect(page.getByRole('status')).toContainText('Anexo enviado');
+ await expect(history.getByText('Painel enviado no teste')).toBeVisible();
+ await page.getByLabel('Anexar imagem ou PDF').setInputFiles({name:'remover.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n%%EOF')});
+ await page.getByRole('button',{name:'Remover anexo'}).click();await expect(page.getByText('remover.pdf')).toHaveCount(0);
+ await page.getByLabel('Anexar imagem ou PDF').setInputFiles({name:'orcamento.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n%%EOF')});
+ await page.getByRole('button',{name:'Enviar anexo'}).click();
+ await expect(page.getByRole('status')).toContainText('Anexo enviado');
+ await expect(history.getByRole('link',{name:'orcamento.pdf'})).toBeVisible();
  await expect.poll(async()=>(await scrollMetrics(page,'message-history')).distance).toBeLessThanOrEqual(4);
  await page.getByRole('button',{name:/Marcar como lida/}).click();
  await expect(page.getByRole('status')).toContainText('marcada como lida');
