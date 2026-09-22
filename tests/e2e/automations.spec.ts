@@ -84,7 +84,7 @@ test('inbox permite pausar e reativar automações por conversa',async({page})=>
  await page.goto('/whatsapp');
  await expect(page.getByRole('heading',{name:'Caixa de entrada'})).toBeVisible();
  await page.getByRole('button',{name:'Pausar automações'}).click();
- await expect(page.getByText('Automações pausadas',{exact:true})).toBeVisible();
+ await expect(page.getByTestId('contact-info').getByText('Pausada',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Reativar automações'}).click();
- await expect(page.getByText('Automações pausadas',{exact:true})).toHaveCount(0);
+ await expect(page.getByTestId('contact-info').getByText('Pausada',{exact:true})).toHaveCount(0);
 });
