@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import {AsyncLocalStorage} from 'node:async_hooks';
 
 declare global {
   interface CloudflareEnv {
@@ -8,10 +9,13 @@ declare global {
 }
 
 const globalDb = globalThis as unknown as { peclatPool?: pg.Pool; peclatPoolUrl?: string };
+const connectionOverride=new AsyncLocalStorage<string>();
 type Database = Pick<pg.Pool, 'query' | 'end'>;
 type QueryClient = Pick<pg.Client, 'query'>;
 
 function connection() {
+  const override=connectionOverride.getStore();
+  if(override)return {connectionString:override,hyperdrive:true};
   let cloudflareEnv: CloudflareEnv | undefined;
   try {
     cloudflareEnv = getCloudflareContext().env;
@@ -26,6 +30,7 @@ function connection() {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL ausente');
   return { connectionString: process.env.DATABASE_URL, hyperdrive: false };
 }
+export function withDatabaseConnectionString<T>(connectionString:string,work:()=>Promise<T>){return connectionOverride.run(connectionString,work);}
 
 function localPool(connectionString: string) {
   if (globalDb.peclatPool && globalDb.peclatPoolUrl === connectionString) return globalDb.peclatPool;

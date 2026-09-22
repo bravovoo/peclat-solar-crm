@@ -33,6 +33,8 @@ const contractUser=(await database().query("INSERT INTO users(email,name,passwor
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[contractUser.id]);
 const whatsappUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('whatsapp@e2e.local','Admin WhatsApp E2E',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[whatsappUser.id]);
+const automationUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('automations@e2e.local','Admin Automações E2E',$1) RETURNING id",[hash])).rows[0];
+await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[automationUser.id]);
 const whatsappOrganization=(await database().query("SELECT id FROM organizations WHERE slug='peclat-solar'")).rows[0].id;
 const whatsappCustomer=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,whatsapp) VALUES ($1,'customer',$2,'Cliente Inbox E2E','5531991112233') RETURNING id",[whatsappOrganization,whatsappUser.id])).rows[0].id;
 await database().query("INSERT INTO crm_tags(organization_id,name,color) VALUES ($1,'Residencial E2E','#195ca0')",[whatsappOrganization]);

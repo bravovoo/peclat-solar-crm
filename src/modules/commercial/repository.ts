@@ -6,6 +6,7 @@ import { crmAccess,getRecord } from '@/modules/crm/repository';
 import { uuid } from '@/modules/crm/domain';
 import { opportunitySchema,opportunityFilters,taskInput,taskFilters,opportunityStages,lossReasons,taskStatuses,stageSchema,type Opportunity,type CommercialTask } from './domain';
 import { assertCommercialAssignee, commercialScope, commercialScopeParams } from './scope';
+import {emitAutomationEvent} from '@/modules/automations/events';
 type Db=Pick<PoolClient,'query'>;
 const json=<T>(value:unknown):T=>JSON.parse(JSON.stringify(value));
 function params(actor:Actor):unknown[]{crmAccess(actor);return commercialScopeParams(actor);}
@@ -39,6 +40,7 @@ export async function saveOpportunity(actor:Actor,input:unknown,id?:string){crmA
  const relation={opportunity_id:saved};
  if(!before){await event(db,actor,relation,'opportunity.created',data.title);if(data.lead_id)await event(db,actor,{record_id:data.lead_id},'lead.opportunity',data.title);}
  else{await event(db,actor,relation,'opportunity.updated','Dados comerciais atualizados.');for(const [changed,action,label] of [['stage','stage','Etapa'],['owner_id','owner','Responsável'],['estimated_value','value','Valor estimado'],['priority','priority','Prioridade'],['expected_close','forecast','Previsão de fechamento']] as const){const next=changed==='owner_id'?owner:data[changed];if(before[changed]!==next)await event(db,actor,relation,`opportunity.${action}`,changed==='stage'?`${opportunityStages[before.stage]} -> ${opportunityStages[data.stage]}`:changed==='owner_id'?`${before.owner_id} -> ${owner}`:`${label} alterado.`);}if(before.owner_id!==owner)await db.query("INSERT INTO audit_logs(organization_id,actor_id,action) VALUES ($1,$2,'commercial.owner.changed')",[actor.organizationId,actor.userId]);}
+ if(before&&before.stage!==data.stage)await emitAutomationEvent(db,{organizationId:actor.organizationId,type:'opportunity.stage_changed',eventId:`opportunity:${saved}:stage:${before.version+1}`,entityType:'opportunity',entityId:saved,opportunityId:saved,payload:{owner_id:owner,stage:data.stage,previous_stage:before.stage}});
  if(!before||before.status!==status){if(status==='won')await event(db,actor,relation,'opportunity.won',`Valor final: ${data.estimated_value}`);else if(status==='lost')await event(db,actor,relation,'opportunity.lost',lossReasons[data.loss_reason as keyof typeof lossReasons]);else if(before)await event(db,actor,relation,'opportunity.reopened','Oportunidade reaberta.');}
  return getOpportunity(actor,saved!,db);
 });}

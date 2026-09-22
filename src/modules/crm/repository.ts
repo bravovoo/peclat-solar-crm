@@ -3,6 +3,7 @@ import { database, transaction } from '@/server/db';
 import { AccessError, requirePermission, type Actor } from '@/modules/auth/policy';
 import { contactSchema, filterSchema, noteSchema, recordSchema, tagSchema, uuid, type CommercialRecord, type Kind, type RecordData, type Tag } from './domain';
 import { assertCommercialAssignee, commercialScope, commercialScopeParams } from '@/modules/commercial/scope';
+import {emitAutomationEvent} from '@/modules/automations/events';
 type Db=Pick<PoolClient,'query'>;
 export class DuplicateError extends AccessError {
  constructor(public matches:{id:string;kind:Kind;name:string}[],public canOverride:boolean){super(409,'Encontramos um cadastro semelhante.');}
@@ -101,6 +102,8 @@ export async function saveRecordInTransaction(actor:Actor,kind:Kind,input:unknow
   await activity(db,actor,savedId!,'record.created','Cadastro criado.');
  }
  await setTags(db,actor,savedId!,data.tag_ids);
+ if(kind==='lead'&&!before)await emitAutomationEvent(db,{organizationId:actor.organizationId,type:'lead.created',eventId:`lead:${savedId}:created`,entityType:'record',entityId:savedId,recordId:savedId,payload:{owner_id:owner,stage:data.stage}});
+ if(kind==='lead'&&before&&before.stage!==data.stage)await emitAutomationEvent(db,{organizationId:actor.organizationId,type:'lead.stage_changed',eventId:`lead:${savedId}:stage:${before.version+1}`,entityType:'record',entityId:savedId,recordId:savedId,payload:{owner_id:owner,stage:data.stage,previous_stage:before.stage}});
  if(data.allow_duplicate)await activity(db,actor,savedId!,'duplicate.confirmed','Possível duplicidade confirmada por usuário autorizado.');
  return getRecord(actor,savedId!,db);
 }
