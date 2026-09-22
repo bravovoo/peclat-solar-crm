@@ -63,6 +63,11 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  const initialList=await scrollMetrics(page,'conversation-list');
  expect(initialList.scrollHeight).toBeGreaterThan(initialList.clientHeight);
  await page.screenshot({path:'test-results/whatsapp-inbox-active-1440.png',fullPage:false});
+ const assistant=page.getByTestId('commercial-ai-assistant');await expect(assistant).toContainText('Como posso ajudar?');
+ await assistant.getByRole('button',{name:'Resumir',exact:true}).click();await expect(assistant.getByText(/procura atendimento solar/)).toBeVisible();
+ await assistant.getByRole('button',{name:'Próxima ação',exact:true}).click();await expect(assistant.getByText(/Solicitar a conta de energia/)).toBeVisible();
+ await assistant.getByRole('button',{name:'Sugerir resposta',exact:true}).click();await expect(assistant.getByText(/Posso ajudar com seu atendimento/)).toBeVisible();
+ await assistant.getByRole('button',{name:'Inserir no campo de mensagem'}).click();const aiDraft=page.getByLabel('Mensagem de WhatsApp');await expect(aiDraft).toHaveValue(/Posso ajudar com seu atendimento/);await aiDraft.fill('Sugestão revisada pelo humano, ainda não enviada.');await expect(page.getByTestId('message-history').getByText('Sugestão revisada pelo humano, ainda não enviada.',{exact:true})).toHaveCount(0);
  await page.setViewportSize({width:390,height:844});
  await expect(page.getByTestId('conversation-list')).toBeVisible();
  await page.getByRole('button',{name:/Cliente Inbox E2E/}).click();
@@ -75,6 +80,7 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
  await page.getByRole('button',{name:'Informações do contato'}).click();
  await expect(page.getByTestId('contact-info')).toBeVisible();
+ await page.getByTestId('commercial-ai-assistant').getByRole('button',{name:'Follow-up',exact:true}).click();await expect(page.getByTestId('commercial-ai-assistant').getByText(/Passando para saber/)).toBeVisible();await page.getByTestId('commercial-ai-assistant').getByRole('button',{name:'Inserir no campo de mensagem'}).click();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
  await page.getByRole('button',{name:'Fechar informações'}).first().click();
  await expect(page.getByTestId('contact-info')).toBeHidden();
  await page.screenshot({path:'test-results/whatsapp-inbox-active-390.png',fullPage:false});
@@ -89,6 +95,7 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await page.getByRole('button',{name:'Novas mensagens ↓'}).click();
  await expect.poll(async()=>(await scrollMetrics(page,'message-history')).distance).toBeLessThanOrEqual(4);
  await expect(page.getByText(newInbound,{exact:true})).toBeVisible();
+ expect((await receiveText(page,`wamid.e2e.ai-failure.${Date.now()}`,'[AI_FAIL] falha simulada local')).status()).toBe(200);await expect(page.getByText('[AI_FAIL] falha simulada local',{exact:true})).toBeVisible({timeout:20000});await assistant.getByRole('button',{name:'Resumir',exact:true}).click();await expect(assistant.getByRole('alert')).toContainText('Não foi possível gerar a sugestão');await expect(page.getByTestId('message-history')).toBeVisible();
 
  await page.getByLabel('Mensagem de WhatsApp').fill('Resposta outbound E2E');
  await page.getByRole('button',{name:'Enviar',exact:true}).click();

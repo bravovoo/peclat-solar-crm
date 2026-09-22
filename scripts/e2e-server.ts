@@ -17,6 +17,7 @@ const db=new EmbeddedPostgres({databaseDir:dir,user:'e2e',password:'e2e_database
 await db.initialise();await db.start();await db.createDatabase('peclat_e2e');
 process.env.DATABASE_URL=`postgresql://e2e:e2e_database_only@127.0.0.1:${port}/peclat_e2e`;
 process.env.APP_URL='http://localhost:3100';process.env.SEED_ADMIN_EMAIL='admin@e2e.local';process.env.SEED_ADMIN_PASSWORD='Peclat teste seguro 2026';process.env.SEED_ADMIN_NAME='Admin de teste';
+process.env.AI_TEST_MODE='true';
 const meta=createHttpServer((request,response)=>{
  response.setHeader('content-type','application/json');const path=request.url??'';
  if(request.method==='GET'&&path.includes('/message_templates'))response.end(JSON.stringify({data:[{id:'template-e2e',name:'retomar_atendimento',language:'pt_BR',category:'UTILITY',status:'APPROVED',components:[{type:'BODY',text:'Olá {{1}}, podemos continuar seu atendimento?'}]}]}));
@@ -44,6 +45,7 @@ await database().query("INSERT INTO memberships(organization_id,user_id,role_cod
 const automationUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('automations@e2e.local','Admin Automações E2E',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[automationUser.id]);
 const whatsappOrganization=(await database().query("SELECT id FROM organizations WHERE slug='peclat-solar'")).rows[0].id;
+await database().query("INSERT INTO ai_assistant_settings(organization_id,enabled,provider,model,context_message_limit,max_requests_per_hour,updated_by) VALUES ($1,true,'openai','fake-commercial-v1',40,60,$2)",[whatsappOrganization,whatsappUser.id]);
 const whatsappCustomer=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,whatsapp) VALUES ($1,'customer',$2,'Cliente Inbox E2E','5531991112233') RETURNING id",[whatsappOrganization,whatsappUser.id])).rows[0].id;
 await database().query("INSERT INTO crm_tags(organization_id,name,color) VALUES ($1,'Residencial E2E','#195ca0')",[whatsappOrganization]);
 await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,whatsapp) VALUES ($1,'customer',$2,'Cliente duplicidade E2E','5531983334455')",[whatsappOrganization,whatsappUser.id]);
