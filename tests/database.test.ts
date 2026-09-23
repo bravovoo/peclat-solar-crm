@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import pg from 'pg';
 import EmbeddedPostgres from '../scripts/embedded-db';
 import { database, transaction } from '../src/server/db';
@@ -156,6 +156,27 @@ test('webhook WhatsApp recebe com HMAC, deduplica, vincula por telefone e proteg
  const audit=await database().query("SELECT action FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.conversation_%' ORDER BY action",[orgA]);assert.ok(audit.rows.some(row=>row.action==='whatsapp.conversation_linked'));assert.ok(audit.rows.some(row=>row.action==='whatsapp.conversation_read'));
  const integration=await whatsappAdminConfiguration(admin);assert.equal(integration.configuration?.webhook_status,'receiving');assert.ok(integration.configuration?.last_event_at);
  await database().query('DELETE FROM whatsapp_conversations WHERE organization_id=$1',[orgA]);await database().query("DELETE FROM whatsapp_webhook_events WHERE organization_id=$1 AND provider_event_id LIKE 'wamid.test.%'",[orgA]);await database().query("DELETE FROM crm_record_contacts WHERE organization_id=$1 AND record_id=$2",[orgA,contactRecord]);await database().query('DELETE FROM crm_contacts WHERE organization_id=$1 AND id=$2',[orgA,contact]);await database().query("DELETE FROM crm_records WHERE organization_id=$1 AND name IN ('Lead WhatsApp','Cliente WhatsApp','Empresa do contato','Ambíguo A','Ambíguo B')",[orgA]);await database().query("DELETE FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.conversation_%'",[orgA]);await database().query("UPDATE whatsapp_integrations SET status='incomplete',webhook_status='awaiting_event',last_event_at=NULL,last_event_type='' WHERE organization_id=$1",[orgA]);
+});
+test('webhook WhatsApp espelha mensagens enviadas pelo Business App sem aumentar não lidas',async()=>{
+ const secret='segredo-echo-somente-teste',recipient='5531900007788',timestamp='1789773000';
+ await database().query("UPDATE whatsapp_integrations SET status='connected' WHERE organization_id=$1",[orgA]);
+ const payload={object:'whatsapp_business_account',entry:[{id:'987654321',changes:[
+  {field:'smb_message_echoes',value:{metadata:{phone_number_id:'123456789'},message_echoes:[
+   {from:'5531999991234',to:recipient,id:'wamid.echo.text',timestamp,type:'text',text:{body:'Resposta enviada pelo celular'}},
+   {from:'5531999991234',to:recipient,id:'wamid.echo.image',timestamp:String(Number(timestamp)+1),type:'image',image:{id:'echo-image',mime_type:'image/jpeg',caption:'Foto pelo celular'}},
+   {from:'5531999991234',to:recipient,id:'wamid.echo.audio',timestamp:String(Number(timestamp)+2),type:'audio',audio:{id:'echo-audio',mime_type:'audio/ogg'}},
+   {from:'5531999991234',to:recipient,id:'wamid.echo.document',timestamp:String(Number(timestamp)+3),type:'document',document:{id:'echo-document',mime_type:'application/pdf',filename:'arquivo.pdf',caption:'PDF pelo celular'}},
+   {from:'5531999991234',to:recipient,id:'wamid.echo.video',timestamp:String(Number(timestamp)+4),type:'video',video:{id:'echo-video',mime_type:'video/mp4',caption:'Vídeo pelo celular'}}
+  ]}},
+  {field:'messages',value:{metadata:{phone_number_id:'123456789'},statuses:[{id:'wamid.echo.text',timestamp:String(Number(timestamp)+5),status:'sent'}]}}
+ ]}]};
+ const raw=Buffer.from(JSON.stringify(payload)),payloadHash=createHash('sha256').update(raw).digest('hex'),signature='sha256='+createHmac('sha256',secret).update(raw).digest('hex');
+ const first=await receiveMetaWebhook(raw,signature,secret),duplicate=await receiveMetaWebhook(raw,signature,secret);assert.equal(first.processed,6);assert.equal(first.duplicates,0);assert.equal(duplicate.processed,0);assert.equal(duplicate.duplicates,6);
+ const inbox=await listWhatsAppConversations(admin,{q:recipient}),conversation=inbox.items[0];assert.ok(conversation);assert.equal(Number(conversation.unread_count),0);assert.equal(conversation.last_message_type,'video');assert.equal(conversation.last_message_preview,'Vídeo pelo celular');
+ const detail=await getWhatsAppConversation(admin,conversation.id);assert.equal(detail.messages.length,5);assert.deepEqual(detail.messages.map(message=>message.direction),['outbound','outbound','outbound','outbound','outbound']);assert.deepEqual(detail.messages.map(message=>message.message_type),['text','image','audio','document','video']);assert.equal(detail.messages[0].text_body,'Resposta enviada pelo celular');assert.equal(detail.messages[0].delivery_status,'sent');assert.equal(detail.messages[3].filename,'arquivo.pdf');
+ const stored=await database().query("SELECT count(*)::int total,bool_and(client_request_id IS NOT NULL) request_ids,bool_and(sent_by IS NOT NULL) senders FROM whatsapp_messages WHERE organization_id=$1 AND conversation_id=$2",[orgA,conversation.id]);assert.deepEqual(stored.rows[0],{total:5,request_ids:true,senders:true});
+ const events=await database().query("SELECT event_type FROM whatsapp_webhook_events WHERE organization_id=$1 AND provider_event_id LIKE 'wamid.echo.%' ORDER BY event_type",[orgA]);assert.equal(events.rowCount,5);assert.ok(events.rows.every(row=>String(row.event_type).startsWith('smb_message_echoes.')));
+ await database().query('DELETE FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgA,conversation.id]);await database().query('DELETE FROM whatsapp_webhook_events WHERE organization_id=$1 AND payload_sha256=$2',[orgA,payloadHash]);await database().query("UPDATE whatsapp_integrations SET status='incomplete',webhook_status='awaiting_event',last_event_at=NULL,last_event_type='' WHERE organization_id=$1",[orgA]);
 });
 test('inbox carrega as 100 mensagens mais recentes e pagina histórico por cursor sem duplicar',async()=>{
  await database().query('INSERT INTO whatsapp_integrations(organization_id,created_by,updated_by) VALUES ($1,$2,$2) ON CONFLICT(organization_id) DO NOTHING',[orgA,admin.userId]);

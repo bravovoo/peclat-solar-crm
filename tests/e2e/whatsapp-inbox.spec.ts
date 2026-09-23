@@ -17,6 +17,12 @@ async function receiveText(page:Page,id:string,text:string,from='5531991112233',
  return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
 }
 
+async function receiveEchoText(page:Page,id:string,text:string,to='5531991112233'){
+ const payload=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'200000000001',changes:[{field:'smb_message_echoes',value:{metadata:{phone_number_id:'100000000001'},message_echoes:[{from:'5531999991234',to,id,timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:text}}]}}]}]});
+ const signature='sha256='+createHmac('sha256','e2e-fake-app-secret').update(payload).digest('hex');
+ return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
+}
+
 async function scrollMetrics(page:Page,testId:string){
  return page.getByTestId(testId).evaluate(element=>({clientHeight:element.clientHeight,scrollHeight:element.scrollHeight,scrollTop:element.scrollTop,distance:element.scrollHeight-element.scrollTop-element.clientHeight}));
 }
@@ -100,6 +106,7 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await page.getByRole('button',{name:'Novas mensagens ↓'}).click();
  await expect.poll(async()=>(await scrollMetrics(page,'message-history')).distance).toBeLessThanOrEqual(4);
  await expect(history.getByText(newInbound,{exact:true})).toBeVisible();
+ const mobileEcho='Resposta simulada do WhatsApp Business';expect((await receiveEchoText(page,`wamid.e2e.echo.${Date.now()}`,mobileEcho)).status()).toBe(200);await expect(history.getByText(mobileEcho,{exact:true})).toBeVisible({timeout:20000});await expect(page.getByRole('button',{name:/Cliente Inbox E2E/})).toContainText(mobileEcho);
  const lateralText='Mensagem nova em conversa não selecionada';expect((await receiveText(page,`wamid.e2e.list.${Date.now()}`,lateralText,'5531987776655','Contato lateral E2E')).status()).toBe(200);
  const lateral=page.getByRole('button',{name:/Contato lateral E2E/});await expect(lateral).toContainText(lateralText,{timeout:20000});await expect(lateral.getByLabel('1 não lidas')).toBeVisible();await expect(page.getByTestId('conversation-list').locator('button').first()).toContainText('Contato lateral E2E');
  await lateral.click();await expect(page.getByTestId('conversation-header').getByRole('heading',{name:'Contato lateral E2E'})).toBeVisible();
@@ -112,7 +119,7 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await page.getByRole('button',{name:'Enviar',exact:true}).click();
  await expect(page.getByRole('status')).toContainText('Mensagem enviada');
  await expect(history.getByText('Resposta outbound E2E',{exact:true})).toBeVisible();
- await expect(page.getByText('Enviada',{exact:true})).toBeVisible();
+ await expect(history.locator('[data-message-id]').filter({hasText:'Resposta outbound E2E'}).getByText('Enviada',{exact:true})).toBeVisible();
  await page.getByLabel('Anexar imagem ou PDF').setInputFiles({name:'painel.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL1GQAAAABJRU5ErkJggg==','base64')});
  await expect(page.getByRole('img',{name:'Prévia do anexo'})).toBeVisible();
  await page.getByLabel('Legenda do anexo').fill('Painel enviado no teste');
