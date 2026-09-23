@@ -306,3 +306,49 @@
  .whatsapp-compose-actions .button{width:auto}
  .whatsapp-template-heading{flex-direction:column;align-items:stretch}
 }
+
+/* Tema visual local. O modo claro permanece definido pelas regras originais acima. */
+.theme-toggle{flex:0 0 auto;width:44px;height:44px;border:1px solid var(--line);background:var(--white);color:#476477;transition:background .15s,color .15s,border-color .15s}
+.theme-toggle:hover{background:#edf4f8;color:var(--blue)}
+
+@media screen {
+ html[data-theme=dark]{color-scheme:dark;--navy:#dbeafe;--blue:#60a5fa;--green:#34d399;--text:#f1f5f9;--muted:#b6c4d4;--line:#334155;--bg:#0f172a;--white:#1e293b;scrollbar-color:#475569 #0f172a}
+ html[data-theme=dark] body{background:#0f172a;color:var(--text)}
+ html[data-theme=dark] .sidebar{background:#111827;color:#dbe5ef}
+ html[data-theme=dark] :where(.topbar,.auth-main,.card,.stat-card,.commercial-totals>div,.opportunity-card,.task-card,.document-card,.contract-summary article,.installation-summary>div,.whatsapp-layout,.whatsapp-list,.whatsapp-detail,.whatsapp-info,.whatsapp-message,.whatsapp-composer,.entity-results,.entity-results button,.crm-modal){background:#1e293b;color:var(--text);border-color:var(--line)}
+ html[data-theme=dark] :where(.badge,.step-icon,.activity-symbol,.pending-icon,.kit-metrics span,.document-status,.post-sales-thumbnail,.installation-gallery article>button,.settings-users-link>span,.whatsapp-lead-tags,.whatsapp-attachment-preview){background:#26364b;color:#cbd5e1;border-color:#405269}
+ html[data-theme=dark] :where(.crm-field input,.crm-field select,.crm-field textarea,.crm-info-grid select,.auth-form input,.energy-unit-bar select,.document-actions select,.whatsapp-filter-select select,.whatsapp-search,.global-search-button){background:#273449;color:var(--text);border-color:#52657a}
+ html[data-theme=dark] :where(input,textarea,select){color-scheme:dark}
+ html[data-theme=dark] :where(input,textarea)::placeholder{color:#94a3b8}
+ html[data-theme=dark] :where(.secondary,.whatsapp-new-messages){background:#26364b;color:#dbeafe;border-color:#475569;box-shadow:none}
+ html[data-theme=dark] :where(.secondary:hover,.icon-button:hover,.theme-toggle:hover,.entity-results button:hover,.energy-row-actions button,.whatsapp-new-messages:hover){background:#334155;color:#f1f5f9}
+ html[data-theme=dark] :where(th,.energy-unit-bar,.energy-summary article,.energy-empty,.email-document-summary,.installation-notes,.agenda-column,.kanban-column,.whatsapp-messages,.whatsapp-messages-shell,.whatsapp-template-preview,.automation-preview,.automation-simulation,.linked-kit>header){background:#162133;color:var(--text);border-color:var(--line)}
+ html[data-theme=dark] :where(.crm-tag,.selected-entity,.info-strip,.green-badge,.check-icon,.energy-summary article.ready,.sizing-callout,.kit-metrics strong,.document-icon,.contract-totals,.installation-contract-summary,.user-credential,.whatsapp-conversation:hover,.whatsapp-conversation.selected,.whatsapp-link-option:hover,.whatsapp-message.outbound,.whatsapp-contact-state,.whatsapp-info-action:hover,.whatsapp-ai-actions button,.whatsapp-ai-compose,.whatsapp-ai-result){background:#173a34;color:#b7f7dd;border-color:#286354}
+ html[data-theme=dark] :where(.whatsapp-conversation,.whatsapp-link-option){background:#1e293b;color:var(--text);border-color:var(--line)}
+ html[data-theme=dark] .whatsapp-messages{background:#111b2b}
+ html[data-theme=dark] .whatsapp-message.outbound{background:#153d34}
+ html[data-theme=dark] :where(.whatsapp-media img,.whatsapp-media video,.whatsapp-attachment-preview){background:#111827}
+ html[data-theme=dark] :where(.avatar,.whatsapp-contact .avatar){background:#26364b;color:#a7f3d0;border-color:#405269}
+ html[data-theme=dark] :where(.breadcrumb,.breadcrumb strong,.app-footer,.stat-card>div,.stat-card>strong,.stat-card>small,.stat-footer,.journey-step small,.journey-step p,.setup-row small,.activity-row small,.activity-row time,.crm-feed-item>p,.kanban-column header strong,.kanban-empty,.opportunity-value,.opportunity-card>small,.energy-bar-column>small,.energy-empty,.sizing-result-grid strong,.sizing-result>footer,.sizing-explanation,.document-title>strong,.document-main .document-notes,.document-history-heading,.whatsapp-title,.whatsapp-filter-select select,.whatsapp-list-heading h2,.whatsapp-info-heading h2,.whatsapp-info-section h4,.whatsapp-ai-result p,.whatsapp-ai-result li){color:var(--text)}
+ html[data-theme=dark] :where(.record-name,.text-link,.back-link,.crm-tabs button.selected,.follow-item strong,.search-group a span){color:#7dd3fc}
+ html[data-theme=dark] :where(.crm-search,.global-search-button,.whatsapp-search,.whatsapp-info-toggle,.whatsapp-info-close,.whatsapp-back){color:#b6c4d4}
+ html[data-theme=dark] :where(.crm-tabs button,.table-secondary,.whatsapp-conversation-main small,.whatsapp-conversation-meta time,.whatsapp-contact>p,.whatsapp-info-section p,.whatsapp-info-section dt){color:var(--muted)}
+ html[data-theme=dark] :where(.crm-modal,.whatsapp-layout){box-shadow:0 22px 70px #02061780}
+ html[data-theme=dark] :where(.danger,.priority-high,.priority-urgent,.badge.overdue,.document-status.refused,.document-status.cancelled,.contract-summary article.danger,.installment-list article.overdue){background:#451f2a;color:#fecdd3;border-color:#7f3342}
+ html[data-theme=dark] :where(.document-status.sent,.document-status.scheduled,.document-status.in_progress){background:#183653;color:#bfdbfe;border-color:#315a82}
+ html[data-theme=dark] :where(.document-status.accepted,.document-status.completed,.document-status.resolved){background:#173a34;color:#bbf7d0;border-color:#286354}
+ html[data-theme=dark] :where(.document-status.awaiting_equipment,.document-status.pending_issue,.document-status.open,.whatsapp-contact-state.unlinked,.whatsapp-lead-duplicate,.automation-kill-switch){background:#452f16;color:#fde68a;border-color:#765225}
+ html[data-theme=dark] :where(.error-box,.auth-form input[aria-invalid=true]){background:#451f2a;color:#fecdd3;border-color:#7f3342}
+ html[data-theme=dark] :where(.crm-notice,.automation-safety){background:#173a34;color:#bbf7d0;border-color:#286354}
+ html[data-theme=dark] :where(.skeleton){background:linear-gradient(90deg,#1e293b,#334155,#1e293b);background-size:200% 100%}
+ html[data-theme=dark] :where(.crm-chart-row meter::-webkit-meter-bar){background:#334155}
+ html[data-theme=dark] .auth-main footer{color:var(--muted)}
+ html[data-theme=dark] .mobile-brand{color:var(--text)}
+ html[data-theme=dark] .theme-toggle{background:#26364b;color:#fbbf24;border-color:#405269}
+ html[data-theme=dark] .skip-link{background:#1e293b;color:#93c5fd}
+ html[data-theme=dark] .crm-modal::backdrop{background:#020617b8}
+ html[data-theme=dark] .whatsapp-info{box-shadow:-12px 0 40px #02061799}
+}
+
+@media(max-width:640px){.theme-toggle{width:40px;height:40px;min-width:40px;min-height:40px;padding:8px}}
+@media(max-width:350px){.profile>.avatar{display:none}.profile{gap:0}.topbar{padding-left:10px;padding-right:10px}.breadcrumb strong{max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}

@@ -75,6 +75,7 @@ await database().query(`INSERT INTO whatsapp_conversations(organization_id,exter
  FROM generate_series(1,28) item`,[whatsappOrganization]);
 // Contas exclusivas da distribuição: preservam os cenários anteriores e seus limites de login.
 const distributionUsers=[
+  ['theme-admin','Admin tema E2E','admin',true],
   ['distribution-admin','Admin distribuição','admin',true],
   ['scope-manager','Gerente carteira E2E','manager',true],
   ['scope-a','Vendedor carteira A','seller',true],
