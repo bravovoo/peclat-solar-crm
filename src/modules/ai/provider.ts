@@ -21,13 +21,29 @@ export class OpenAiCommercialProvider implements CommercialAiProvider{
   return {output:validated.data,provider:'openai',model:typeof value.model==='string'?value.model:this.model,inputTokens:Number(value.usage?.input_tokens)||undefined,outputTokens:Number(value.usage?.output_tokens)||undefined};
  }
 }
+export class GeminiCommercialAiProvider implements CommercialAiProvider{
+ constructor(private apiKey:string,private model:string,private fetcher:typeof fetch=fetch){}
+ async generate(input:{action:CommercialAiAction;context:CommercialAiContext;signal:AbortSignal}){
+  if(!/^[a-zA-Z0-9._-]{1,100}$/.test(this.model))throw new AiProviderError('provider_request');
+  const response=await this.fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`,{method:'POST',signal:input.signal,headers:{'x-goog-api-key':this.apiKey,'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:instructions}]},contents:[{role:'user',parts:[{text:`AÇÃO SOLICITADA: ${input.action}\n\nCONTEXTO CRM CONFIÁVEL E MENSAGENS NÃO CONFIÁVEIS DELIMITADAS EM JSON:\n${JSON.stringify(input.context)}`}]}],generationConfig:{responseMimeType:'application/json',responseJsonSchema:schema,maxOutputTokens:1800}})});
+  if(!response.ok){const code=response.status===429?'free_tier_exhausted':response.status===401||response.status===403?'provider_auth':response.status>=500?'provider_unavailable':'provider_request';throw new AiProviderError(code);}
+  let raw:unknown;try{raw=await response.json();}catch{throw new AiProviderError('invalid_json');}
+  const value=raw as {candidates?:{content?:{parts?:{text?:unknown}[]}}[];modelVersion?:unknown;usageMetadata?:{promptTokenCount?:unknown;candidatesTokenCount?:unknown}};
+  const text=value.candidates?.flatMap(candidate=>candidate.content?.parts??[]).find(part=>typeof part.text==='string')?.text;
+  if(typeof text!=='string'||!text.trim())throw new AiProviderError('empty_response');
+  let parsed:unknown;try{parsed=JSON.parse(text);}catch{throw new AiProviderError('invalid_json');}
+  const validated=commercialAiOutput.safeParse(parsed);if(!validated.success)throw new AiProviderError('invalid_schema');
+  return {output:validated.data,provider:'gemini',model:typeof value.modelVersion==='string'?value.modelVersion:this.model,inputTokens:Number(value.usageMetadata?.promptTokenCount)||undefined,outputTokens:Number(value.usageMetadata?.candidatesTokenCount)||undefined};
+ }
+}
 export class AiProviderError extends Error{constructor(public code:string){super(code)}}
 class TestCommercialProvider implements CommercialAiProvider{async generate(input:{action:CommercialAiAction;context:CommercialAiContext}){if(input.context.conversation.messages.some(message=>message.content.includes('[AI_FAIL]')))throw new AiProviderError('provider_unavailable');const name=input.context.contact.name;return {provider:'fake',model:'fake-commercial-v1',inputTokens:100,outputTokens:80,output:{summary:`${name} procura atendimento solar. A conversa foi resumida sem executar ações.`,intent:'orçamento',objections:[],missingInformation:['Conta de energia atualizada'],nextAction:'Solicitar a conta de energia.',suggestedQuestion:'Você consegue me enviar uma foto da sua última conta de energia?',suggestedReply:`Olá, ${name}! Posso ajudar com seu atendimento. Você consegue me enviar sua conta de energia?`,followUp:`Olá, ${name}! Passando para saber se conseguiu analisar as informações. Posso ajudar com alguma dúvida?`,closingSupport:'Em relação ao projeto, existe algum ponto que gostaria de esclarecer antes de definirmos o próximo passo?'}};}}
 function testMode(){try{const url=new URL(process.env.APP_URL??'');return process.env.AI_TEST_MODE==='true'&&['127.0.0.1','localhost'].includes(url.hostname);}catch{return false;}}
-export function configuredAiProvider(configuredModel?:string):CommercialAiProvider{
+export function configuredAiProvider(configuredProvider:string,configuredModel?:string):CommercialAiProvider{
  if(testMode())return new TestCommercialProvider();
- const provider=(process.env.AI_PROVIDER??'openai').trim().toLowerCase(),key=process.env.OPENAI_API_KEY?.trim(),model=configuredModel?.trim()||process.env.OPENAI_MODEL?.trim()||'gpt-5-mini';
- if(provider!=='openai'||!key)throw new AccessError(503,'Assistente de IA ainda não configurado.');
- return new OpenAiCommercialProvider(key,model);
+ const provider=configuredProvider.trim().toLowerCase();
+ if(provider==='gemini'){const key=process.env.GEMINI_API_KEY?.trim(),model=configuredModel?.trim()||'gemini-2.5-flash';if(!key)throw new AccessError(503,'Gemini ainda não configurado.');return new GeminiCommercialAiProvider(key,model);}
+ if(provider==='openai'){const key=process.env.OPENAI_API_KEY?.trim(),model=configuredModel?.trim()||process.env.OPENAI_MODEL?.trim()||'gpt-5-mini';if(!key)throw new AccessError(503,'OpenAI ainda não configurada.');return new OpenAiCommercialProvider(key,model);}
+ throw new AccessError(503,'Provedor de IA não suportado.');
 }
-export function aiProviderConfigured(){return testMode()||((process.env.AI_PROVIDER??'openai').trim().toLowerCase()==='openai'&&Boolean(process.env.OPENAI_API_KEY?.trim()));}
+export function aiProviderConfigured(provider:string){if(testMode())return true;if(provider==='gemini')return Boolean(process.env.GEMINI_API_KEY?.trim());if(provider==='openai')return Boolean(process.env.OPENAI_API_KEY?.trim());return false;}

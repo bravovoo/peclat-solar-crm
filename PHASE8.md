@@ -105,3 +105,17 @@ Os testes usam provider fake local, sem chamada de IA real e sem envio de WhatsA
 ### Validação local da Fase 8.6
 
 Passaram 107/107 testes unitários e integrados. Os 30 cenários Playwright foram validados, incluindo a inbox com provider fake, inserção e edição sem envio, falha segura e responsividade em 390×844 e 1440×900. TypeScript, lint, build Next.js, bundle OpenNext, geração de `.open-next/worker.js`, Wrangler dry-run e `git diff --check` passaram. Nenhum teste chamou IA real ou enviou mensagem de WhatsApp. A migration 022 passou em bancos temporários e foi aplicada no Supabase com checksum `b6a3ce57baadfae39fd02d26449a3efb5fbb50dc48af1c719a51ba05fbaf216f`; as duas tabelas mantêm RLS ativa, sem `FORCE`, sem policies e sem privilégios diretos da Data API.
+
+## 8.6.1 Google Gemini Free Tier
+
+O Assistente Comercial passa a oferecer **Google Gemini** e **OpenAI** como providers selecionáveis por organização, mantendo a interface `CommercialAiProvider`. O adapter `GeminiCommercialAiProvider` usa a API oficial `generateContent` pelo backend, envia a chave somente no header `x-goog-api-key` e solicita o mesmo JSON Schema estrito da Fase 8.6. O modelo inicial do Gemini é `gemini-2.5-flash`; o administrador pode alterar o modelo sem expor a credencial no navegador. Não existe fallback automático entre providers nem tentativa de ativar billing.
+
+A seleção persistida determina exclusivamente qual provider é chamado. A ausência de `GEMINI_API_KEY` mantém o Gemini indisponível sem afetar o restante do CRM. HTTP 429 é apresentado como limite gratuito atingido e não provoca chamada à OpenAI. Erros 400, 401, 403, 5xx, timeout, JSON inválido, schema inválido e resposta vazia continuam seguros. A telemetria conserva provider, modelo, ação, duração, tokens, resultado, usuário, organização e conversa, sem armazenar prompt ou resposta integral.
+
+Antes da chamada, o contexto remove telefone, CPF/CNPJ, e-mail, URLs e nomes de arquivos. Mídias e documentos continuam apenas como marcadores textuais, sem bytes ou conteúdo do arquivo. Isolamento por organização, permissões, defesa contra prompt injection, rate limit, idempotência, timeout, validação factual e revisão humana permanecem ativos.
+
+A migration `023_gemini_ai_provider.sql` foi necessária porque a constraint da migration 022 aceitava somente `openai`. Ela amplia a constraint para `gemini` e `openai` e define `gemini`/`gemini-2.5-flash` como defaults para novas configurações, sem alterar configurações existentes, criar tabelas ou modificar RLS e privilégios.
+
+### Validação local da Fase 8.6.1
+
+Passaram 110/110 testes unitários e integrados com providers simulados e 31 cenários Playwright, incluindo seleção e persistência do Gemini, troca para OpenAI, ausência de campo de credencial e responsividade em 390×844 e 1440×900. Nenhum teste chamou Google, OpenAI ou WhatsApp reais. TypeScript, lint, build Next.js, bundle OpenNext, Wrangler dry-run e `git diff --check` passaram.

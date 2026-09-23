@@ -8,7 +8,7 @@ export const commercialAiRequest=z.object({
  request_id:z.uuid(),
 }).strict();
 export const aiSettingsInput=z.object({
- enabled:z.boolean(),provider:z.literal('openai').default('openai'),
+ enabled:z.boolean(),provider:z.enum(['gemini','openai']),
  model:z.string().trim().min(1).max(100),context_message_limit:z.number().int().min(10).max(50),
  max_requests_per_hour:z.number().int().min(1).max(500),version:z.number().int().positive().nullable(),
 }).strict();
