@@ -60,7 +60,7 @@ ESLint 9 foi fixado para compatibilidade com os plugins atuais do Next.js; o reg
 
 ## Limites antes de produção
 
-Esta aprovação cobre a aplicação local, não uma implantação pública. Antes de produção: SMTP real, HTTPS, política CSP com nonce, usuário PostgreSQL com privilégios mínimos, backups restaurados em teste, retenção de auditoria e limites na borda. RLS não está habilitada; o isolamento atual ocorre nos repositórios e nas chaves compostas, com testes de fronteira. Não expor o driver diretamente a novos endpoints.
+A produção usa RLS em todas as tabelas públicas do CRM (75 antes da migration operacional 024; 77 após sua aplicação), sem FORCE RLS ou políticas públicas. Os privilégios diretos de PUBLIC, anon, authenticated e service_role estão revogados; o backend acessa o PostgreSQL pela conexão privilegiada do Hyperdrive. Os repositórios continuam aplicando isolamento por organização, e o driver do banco não deve ser exposto diretamente ao navegador.
 
 Documentação: ARCHITECTURE.md, DATABASE.md, ROADMAP.md, ENVIRONMENT.md e API.md.
 

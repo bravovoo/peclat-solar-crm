@@ -6,6 +6,7 @@ import {uuid} from '@/modules/crm/domain';
 import {appendInstallationHistory,getInstallation} from './repository';
 import {checklistUpdateSchema,deliverySchema,fileMetadataSchema,issueSchema,type ChecklistItem,type InstallationDelivery,type InstallationFile,type InstallationIssue} from './domain';
 import {loadInstallationFile,removeInstallationFile,storeInstallationFile,validateInstallationFile} from './file-storage';
+import {enqueueStorageDeletion,processStorageDeletionJobs} from '@/modules/operations/maintenance';
 
 type Db=Pick<PoolClient,'query'>;
 const json=<T>(value:unknown)=>JSON.parse(JSON.stringify(value)) as T;
@@ -67,9 +68,10 @@ export async function deleteInstallationFile(actor:Actor,id:string,version:unkno
   const installation=await getInstallation(actor,file.installation_id,db,true);
   await db.query('UPDATE installation_files SET deleted_by=$3,deleted_at=now(),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2',[actor.organizationId,id,actor.userId]);
   await appendInstallationHistory(db,actor,installation,file.kind==='photo'?'photo_removed':'document_removed',`${file.name} removido.`);
-  return file;
+  const deletionJobId=await enqueueStorageDeletion(db,actor.organizationId,'installation_file',file.id,file.storage_key);
+  return {...file,deletionJobId};
  });
- await removeInstallationFile(row.storage_key);
+ await processStorageDeletionJobs(1,[row.deletionJobId]);
  return {removed:true};
 }
 export async function saveInstallationIssue(actor:Actor,input:unknown,id?:string){

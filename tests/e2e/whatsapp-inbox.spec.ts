@@ -37,7 +37,7 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await page.getByRole('link',{name:'WhatsApp',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Caixa de entrada'})).toBeVisible();
  await expect(page.getByText('ATENDIMENTO ATIVO')).toBeVisible();
- await expect(page.getByText('Preciso acompanhar meu projeto',{exact:true})).toBeVisible();
+ await expect(page.getByTestId('message-history').getByText('Preciso acompanhar meu projeto',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:/Marcar como lida/})).toBeVisible();
  await expect(page.getByText(/Janela aberta até/)).toBeVisible();
  await expect(page.getByTestId('contact-info')).toBeVisible();

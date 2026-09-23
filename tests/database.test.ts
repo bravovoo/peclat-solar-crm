@@ -19,12 +19,13 @@ import { distributeLeads, setTeamDistribution, transferPortfolio } from '../src/
 import {performanceDashboard,saveGoal} from '../src/modules/commercial-goals/repository';
 import {createManagedUser,resetManagedUserAccess,updateManagedUser,userAdministration} from '../src/modules/users/repository';
 import {saveWhatsAppConfiguration,whatsappActionAvailability,whatsappAdminConfiguration} from '../src/modules/whatsapp/repository';
-import {receiveMetaWebhook} from '../src/modules/whatsapp/webhook';
+import {enqueueMetaWebhook,processMetaWebhookBatches,receiveMetaWebhook} from '../src/modules/whatsapp/webhook';
 import {createLeadFromWhatsApp,getWhatsAppConversation,linkWhatsAppConversation,listWhatsAppConversations,markWhatsAppConversationRead,whatsappConversationsForRecord} from '../src/modules/whatsapp/inbox';
 import {listWhatsAppTemplates,sendWhatsAppMedia,sendWhatsAppTemplate,sendWhatsAppText,syncWhatsAppTemplates} from '../src/modules/whatsapp/outbound';
 import {whatsappMediaResponse} from '../src/modules/whatsapp/media';
 import {aiAssistantSettings,commercialAiProviderTimeoutMs,runCommercialAi,saveAiAssistantSettings} from '../src/modules/ai/assistant';
 import {AiProviderError,type CommercialAiProvider} from '../src/modules/ai/provider';
+import {cleanupExpiredOperationalData} from '../src/modules/operations/maintenance';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
 const password='Teste exclusivo 2026!';
@@ -52,7 +53,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,23);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,24);
   const providerConstraint=(await database().query("SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conname='ai_assistant_settings_provider_check'")).rows[0].definition;assert.match(providerConstraint,/gemini/);assert.match(providerConstraint,/openai/);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
@@ -101,7 +102,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,75);
+  assert.equal(tables.rowCount,77);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
@@ -110,6 +111,12 @@ test('login rejeita tenant alheio, credenciais inválidas e token forjado',async
   await assert.rejects(()=>login({organization:'outra-empresa',email:'admin@test.local',password}),{status:401});
   await assert.rejects(()=>login({organization:'peclat-solar',email:'admin@test.local',password:'errada'}),{status:401});
   assert.equal(await sessionActor('a'.repeat(64)),null);assert.equal(await sessionActor('invalid'),null);
+});
+test('manutenção remove somente sessões, resets e rate limits expirados',async()=>{
+ const future=new Date(Date.now()+3_600_000),past=new Date(Date.now()-3_600_000),user=(await database().query('SELECT user_id FROM memberships WHERE organization_id=$1 LIMIT 1',[orgA])).rows[0].user_id;
+ await database().query('INSERT INTO sessions(token_hash,organization_id,user_id,expires_at) VALUES ($1,$2,$3,$4),($5,$2,$3,$6)',[tokenHash('expired-maintenance'),orgA,user,past,tokenHash('active-maintenance'),future]);await database().query('INSERT INTO password_resets(token_hash,user_id,organization_id,expires_at) VALUES ($1,$2,$3,$4),($5,$2,$3,$6)',[tokenHash('expired-reset'),user,orgA,past,tokenHash('active-reset'),future]);await database().query('INSERT INTO rate_limits(key_hash,attempts,expires_at) VALUES ($1,1,$2),($3,1,$4)',[tokenHash('expired-limit'),past,tokenHash('active-limit'),future]);
+ const result=await cleanupExpiredOperationalData();assert.ok(Number(result.sessions)>=1);assert.ok(Number(result.password_resets)>=1);assert.ok(Number(result.rate_limits)>=1);assert.equal((await database().query('SELECT count(*)::int total FROM sessions WHERE token_hash=$1',[tokenHash('active-maintenance')])).rows[0].total,1);assert.equal((await database().query('SELECT count(*)::int total FROM password_resets WHERE token_hash=$1',[tokenHash('active-reset')])).rows[0].total,1);assert.equal((await database().query('SELECT count(*)::int total FROM rate_limits WHERE key_hash=$1',[tokenHash('active-limit')])).rows[0].total,1);
+ await database().query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash('active-maintenance')]);await database().query('DELETE FROM password_resets WHERE token_hash=$1',[tokenHash('active-reset')]);await database().query('DELETE FROM rate_limits WHERE key_hash=$1',[tokenHash('active-limit')]);
 });
 test('permissões efetivas e consultas não vazam membros ou auditoria de outro tenant',async()=>{
   assert.equal(admin.organizationId,orgA);const team=await teamMembers(admin);
@@ -156,6 +163,14 @@ test('webhook WhatsApp recebe com HMAC, deduplica, vincula por telefone e proteg
  const audit=await database().query("SELECT action FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.conversation_%' ORDER BY action",[orgA]);assert.ok(audit.rows.some(row=>row.action==='whatsapp.conversation_linked'));assert.ok(audit.rows.some(row=>row.action==='whatsapp.conversation_read'));
  const integration=await whatsappAdminConfiguration(admin);assert.equal(integration.configuration?.webhook_status,'receiving');assert.ok(integration.configuration?.last_event_at);
  await database().query('DELETE FROM whatsapp_conversations WHERE organization_id=$1',[orgA]);await database().query("DELETE FROM whatsapp_webhook_events WHERE organization_id=$1 AND provider_event_id LIKE 'wamid.test.%'",[orgA]);await database().query("DELETE FROM crm_record_contacts WHERE organization_id=$1 AND record_id=$2",[orgA,contactRecord]);await database().query('DELETE FROM crm_contacts WHERE organization_id=$1 AND id=$2',[orgA,contact]);await database().query("DELETE FROM crm_records WHERE organization_id=$1 AND name IN ('Lead WhatsApp','Cliente WhatsApp','Empresa do contato','Ambíguo A','Ambíguo B')",[orgA]);await database().query("DELETE FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.conversation_%'",[orgA]);await database().query("UPDATE whatsapp_integrations SET status='incomplete',webhook_status='awaiting_event',last_event_at=NULL,last_event_type='' WHERE organization_id=$1",[orgA]);
+});
+test('webhook WhatsApp persiste lote antes de processar, recupera falha e deduplica retry da Meta',async()=>{
+ const secret='segredo-fila-webhook-teste',payload=(id:string)=>({object:'whatsapp_business_account',entry:[{id:'987654321',changes:[{field:'messages',value:{metadata:{phone_number_id:'123456789'},messages:[{from:'5531912340099',id,timestamp:'1789772600',type:'text',text:{body:'Mensagem enfileirada'}}],statuses:[{id:`${id}.out`,timestamp:'1789772601',status:'sent'}]}}]}]});
+ const signed=(value:unknown)=>{const raw=Buffer.from(JSON.stringify(value));return {raw,signature:'sha256='+createHmac('sha256',secret).update(raw).digest('hex')};};
+ const first=signed(payload('wamid.queue.1')),queued=await enqueueMetaWebhook(first.raw,first.signature,secret),duplicate=await enqueueMetaWebhook(first.raw,first.signature,secret);assert.equal(queued.queued,1);assert.equal(duplicate.duplicates,1);assert.equal((await database().query("SELECT count(*)::int total FROM whatsapp_messages WHERE organization_id=$1 AND meta_message_id='wamid.queue.1'",[orgA])).rows[0].total,0);
+ assert.deepEqual(await processMetaWebhookBatches(10,queued.batchIds,secret),{processed:1,completed:1});assert.equal((await database().query("SELECT count(*)::int total FROM whatsapp_messages WHERE organization_id=$1 AND meta_message_id='wamid.queue.1'",[orgA])).rows[0].total,1);
+ const second=signed(payload('wamid.queue.2')),recoverable=await enqueueMetaWebhook(second.raw,second.signature,secret);await database().query("UPDATE whatsapp_webhook_batches SET signature='sha256='||repeat('0',64) WHERE id=$1",[recoverable.batchIds[0]]);assert.deepEqual(await processMetaWebhookBatches(10,recoverable.batchIds,secret),{processed:1,completed:0});assert.equal((await database().query('SELECT status FROM whatsapp_webhook_batches WHERE id=$1',[recoverable.batchIds[0]])).rows[0].status,'pending');await database().query('UPDATE whatsapp_webhook_batches SET signature=$2,scheduled_for=now() WHERE id=$1',[recoverable.batchIds[0],second.signature]);assert.deepEqual(await processMetaWebhookBatches(10,recoverable.batchIds,secret),{processed:1,completed:1});assert.equal((await database().query("SELECT count(*)::int total FROM whatsapp_messages WHERE organization_id=$1 AND meta_message_id='wamid.queue.2'",[orgA])).rows[0].total,1);
+ await database().query("DELETE FROM whatsapp_conversations WHERE organization_id=$1 AND external_wa_id='5531912340099'",[orgA]);await database().query("DELETE FROM whatsapp_webhook_events WHERE organization_id=$1 AND provider_event_id LIKE 'wamid.queue.%'",[orgA]);await database().query('DELETE FROM whatsapp_webhook_batches WHERE organization_id=$1',[orgA]);
 });
 test('webhook WhatsApp espelha mensagens enviadas pelo Business App sem aumentar não lidas',async()=>{
  const secret='segredo-echo-somente-teste',recipient='5531900007788',timestamp='1789773000';

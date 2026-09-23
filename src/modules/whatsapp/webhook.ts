@@ -1,6 +1,6 @@
 import {createHash,createHmac,timingSafeEqual} from 'node:crypto';
 import type {PoolClient} from 'pg';
-import {transaction} from '@/server/db';
+import {database,transaction} from '@/server/db';
 import {AccessError} from '@/modules/auth/policy';
 import {normalizeWhatsAppNumber} from './domain';
 import {emitAutomationEvent} from '@/modules/automations/events';
@@ -29,12 +29,15 @@ function parseMessage(entry:Json,value:Json,message:Json,direction:'inbound'|'ou
 }
 function parseStatus(entry:Json,value:Json,raw:Json):IncomingStatus|null{const status=text(raw.status,30);if(!['sent','delivered','read','failed'].includes(status))return null;const metadata=object(value.metadata),id=text(raw.id,240),phoneNumberId=text(metadata.phone_number_id,100),businessId=text(entry.id,100),timestamp=new Date(Number(text(raw.timestamp,30))*1000);if(!id||!phoneNumberId||!businessId||Number.isNaN(timestamp.getTime()))throw new AccessError(400,'Payload de webhook inválido.');const error=object(array(raw.errors)[0]);return {businessId,phoneNumberId,id,timestamp,status:status as IncomingStatus['status'],failureCode:text(error.code,80),failureTitle:text(error.title,180),failureDetail:text(object(error.error_data).details??error.message,500)};}
 function extract(payload:unknown){const root=object(payload),messages:Incoming[]=[],statuses:IncomingStatus[]=[];if(root.object!=='whatsapp_business_account'||!Array.isArray(root.entry))return {messages,statuses};for(const rawEntry of root.entry){const entry=object(rawEntry);for(const rawChange of array(entry.changes)){const change=object(rawChange),value=object(change.value);if(change.field==='messages'){for(const rawMessage of array(value.messages))messages.push(parseMessage(entry,value,object(rawMessage)));for(const rawStatus of array(value.statuses)){const parsed=parseStatus(entry,value,object(rawStatus));if(parsed)statuses.push(parsed);}}else if(change.field==='smb_message_echoes'){for(const rawEcho of array(value.message_echoes))messages.push(parseMessage(entry,value,object(rawEcho),'outbound'));}}}return {messages,statuses};}
+function parseSignedPayload(raw:Uint8Array,signature:string|null,secret:string){
+ if(!validMetaSignature(raw,signature,secret))throw new AccessError(signature?403:401,'Assinatura do webhook inválida.');
+ let payload:unknown;try{payload=JSON.parse(Buffer.from(raw).toString('utf8'));}catch{throw new AccessError(400,'Payload de webhook inválido.');}
+ return {payload,incoming:extract(payload)};
+}
 async function resolveRecord(db:Db,organizationId:string,waId:string){const result=await db.query<{id:string}>(`SELECT DISTINCT r.id FROM crm_records r WHERE r.organization_id=$1 AND r.deleted_at IS NULL AND (r.phone=$2 OR r.whatsapp=$2 OR EXISTS(SELECT 1 FROM crm_record_contacts rc JOIN crm_contacts c ON c.organization_id=rc.organization_id AND c.id=rc.contact_id WHERE rc.organization_id=r.organization_id AND rc.record_id=r.id AND (c.phone=$2 OR c.whatsapp=$2))) ORDER BY r.id LIMIT 3`,[organizationId,waId]);return result.rows.length===1?{recordId:result.rows[0].id,status:'identified',source:'automatic'}:{recordId:null,status:result.rows.length>1?'ambiguous':'unidentified',source:'none'};}
 export async function receiveMetaWebhook(raw:Uint8Array,signature:string|null,secret=process.env.WHATSAPP_APP_SECRET){
  if(!secret)throw new AccessError(503,'Webhook ainda não configurado.');
- if(!validMetaSignature(raw,signature,secret))throw new AccessError(signature?403:401,'Assinatura do webhook inválida.');
- let payload:unknown;try{payload=JSON.parse(Buffer.from(raw).toString('utf8'));}catch{throw new AccessError(400,'Payload de webhook inválido.');}
- const incoming=extract(payload);if(!incoming.messages.length&&!incoming.statuses.length)return {accepted:true,processed:0,duplicates:0};
+ const {incoming}=parseSignedPayload(raw,signature,secret);if(!incoming.messages.length&&!incoming.statuses.length)return {accepted:true,processed:0,duplicates:0};
  const hash=createHash('sha256').update(raw).digest('hex');
  return transaction(async db=>{
   let processed=0,duplicates=0;
@@ -66,4 +69,33 @@ export async function receiveMetaWebhook(raw:Uint8Array,signature:string|null,se
   }
   return {accepted:true,processed,duplicates};
  });
+}
+
+type WebhookBatch={id:string;raw_payload:string;signature:string;attempts:number};
+export async function enqueueMetaWebhook(raw:Uint8Array,signature:string|null,secret=process.env.WHATSAPP_APP_SECRET){
+ if(!secret)throw new AccessError(503,'Webhook ainda não configurado.');
+ const {incoming}=parseSignedPayload(raw,signature,secret);
+ if(!incoming.messages.length&&!incoming.statuses.length)return {accepted:true,queued:0,duplicates:0,batchIds:[] as string[]};
+ const pairs=new Map<string,{phoneNumberId:string;businessId:string}>();
+ for(const event of [...incoming.messages,...incoming.statuses])pairs.set(`${event.phoneNumberId}:${event.businessId}`,event);
+ const organizations=new Set<string>();
+ for(const pair of pairs.values()){
+  const found=await database().query<{organization_id:string}>('SELECT organization_id FROM whatsapp_integrations WHERE phone_number_id=$1 AND business_account_id=$2',[pair.phoneNumberId,pair.businessId]);
+  if(found.rows[0])organizations.add(found.rows[0].organization_id);
+ }
+ if(!organizations.size)return {accepted:true,queued:0,duplicates:0,batchIds:[] as string[]};
+ if(organizations.size!==1)throw new AccessError(400,'Payload de webhook inválido.');
+ const organizationId=[...organizations][0],hash=createHash('sha256').update(raw).digest('hex'),rawPayload=Buffer.from(raw).toString('utf8');
+ const inserted=await database().query<{id:string}>(`INSERT INTO whatsapp_webhook_batches(organization_id,payload_sha256,raw_payload,signature) VALUES ($1,$2,$3,$4) ON CONFLICT(organization_id,payload_sha256) DO NOTHING RETURNING id`,[organizationId,hash,rawPayload,signature]);
+ if(inserted.rows[0])return {accepted:true,queued:1,duplicates:0,batchIds:[inserted.rows[0].id]};
+ return {accepted:true,queued:0,duplicates:1,batchIds:[] as string[]};
+}
+
+export async function processMetaWebhookBatches(limit=20,ids?:string[],secret=process.env.WHATSAPP_APP_SECRET){
+ if(!secret)throw new AccessError(503,'Webhook ainda não configurado.');
+ await database().query(`UPDATE whatsapp_webhook_batches SET status=CASE WHEN attempts>=5 THEN 'failed' ELSE 'pending' END,locked_at=NULL,scheduled_for=now()+interval '5 minutes',safe_error='webhook_batch_stale',updated_at=now() WHERE status='processing' AND locked_at<now()-interval '10 minutes'`);
+ const jobs=await transaction(async db=>{const result=await db.query<WebhookBatch>(`SELECT id,raw_payload,signature,attempts FROM whatsapp_webhook_batches WHERE status='pending' AND scheduled_for<=now() AND ($2::uuid[] IS NULL OR id=ANY($2::uuid[])) ORDER BY scheduled_for,id FOR UPDATE SKIP LOCKED LIMIT $1`,[limit,ids?.length?ids:null]);if(result.rowCount)await db.query("UPDATE whatsapp_webhook_batches SET status='processing',attempts=attempts+1,locked_at=now(),updated_at=now() WHERE id=ANY($1::uuid[])",[result.rows.map(row=>row.id)]);return result.rows.map(row=>({...row,attempts:row.attempts+1}));});
+ let completed=0;
+ for(const job of jobs){try{await receiveMetaWebhook(Buffer.from(job.raw_payload,'utf8'),job.signature,secret);await database().query("UPDATE whatsapp_webhook_batches SET status='completed',locked_at=NULL,completed_at=now(),safe_error='',raw_payload='',signature='sha256='||repeat('0',64),updated_at=now() WHERE id=$1",[job.id]);completed++;}catch(error){const terminal=job.attempts>=5;await database().query(`UPDATE whatsapp_webhook_batches SET status=$2,locked_at=NULL,scheduled_for=now()+make_interval(mins=>$3::int),safe_error='webhook_processing_failed',updated_at=now() WHERE id=$1`,[job.id,terminal?'failed':'pending',job.attempts*5]);console.error('whatsapp_webhook_processing_failed',{type:error instanceof Error?error.name:'unknown'});}}
+ return {processed:jobs.length,completed};
 }
