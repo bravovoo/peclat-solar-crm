@@ -51,6 +51,11 @@ test('alterna o tema sem perder o formulário e persiste a preferência local', 
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
+  await page.goto('/whatsapp');
+  const selectedConversation = page.locator('.whatsapp-conversation.selected');
+  await expect(selectedConversation).toBeVisible();
+  await expect(selectedConversation).toHaveCSS('background-color', 'rgb(23, 58, 52)');
+  await expect(selectedConversation.locator('.whatsapp-conversation-main strong')).toHaveCSS('color', 'rgb(241, 245, 249)');
   await page.goto('/');
   await page.screenshot({ path: 'test-results/theme-dark-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });

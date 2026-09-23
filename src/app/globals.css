@@ -325,6 +325,11 @@
  html[data-theme=dark] :where(th,.energy-unit-bar,.energy-summary article,.energy-empty,.email-document-summary,.installation-notes,.agenda-column,.kanban-column,.whatsapp-messages,.whatsapp-messages-shell,.whatsapp-template-preview,.automation-preview,.automation-simulation,.linked-kit>header){background:#162133;color:var(--text);border-color:var(--line)}
  html[data-theme=dark] :where(.crm-tag,.selected-entity,.info-strip,.green-badge,.check-icon,.energy-summary article.ready,.sizing-callout,.kit-metrics strong,.document-icon,.contract-totals,.installation-contract-summary,.user-credential,.whatsapp-conversation:hover,.whatsapp-conversation.selected,.whatsapp-link-option:hover,.whatsapp-message.outbound,.whatsapp-contact-state,.whatsapp-info-action:hover,.whatsapp-ai-actions button,.whatsapp-ai-compose,.whatsapp-ai-result){background:#173a34;color:#b7f7dd;border-color:#286354}
  html[data-theme=dark] :where(.whatsapp-conversation,.whatsapp-link-option){background:#1e293b;color:var(--text);border-color:var(--line)}
+ html[data-theme=dark] .whatsapp-conversation:hover,
+ html[data-theme=dark] .whatsapp-conversation.selected{background:#173a34;color:#f1f5f9;border-color:#286354}
+ html[data-theme=dark] .whatsapp-conversation.selected .whatsapp-conversation-main strong{color:#f1f5f9}
+ html[data-theme=dark] .whatsapp-conversation.selected :where(.whatsapp-conversation-main small,.whatsapp-conversation-meta time){color:#cbd5e1}
+ html[data-theme=dark] .whatsapp-conversation.selected .whatsapp-conversation-main em{color:#86efac}
  html[data-theme=dark] .whatsapp-messages{background:#111b2b}
  html[data-theme=dark] .whatsapp-message.outbound{background:#153d34}
  html[data-theme=dark] :where(.whatsapp-media img,.whatsapp-media video,.whatsapp-attachment-preview){background:#111827}
