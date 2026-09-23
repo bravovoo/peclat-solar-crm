@@ -181,6 +181,7 @@
 .whatsapp-message.reaction footer{margin-top:4px}
 .whatsapp-new-messages{position:absolute;right:18px;bottom:14px;z-index:2;border:1px solid #b9ddce;border-radius:999px;background:#fff;color:#216b52;box-shadow:0 5px 18px #173d5826;padding:8px 13px;font-size:12px;font-weight:700}
 .whatsapp-new-messages:hover{background:#eef8f3}
+.whatsapp-load-history{align-self:center;max-width:100%;white-space:normal}
 .whatsapp-composer{flex:0 0 auto;max-height:48%;overflow-y:auto}
 @media(max-width:900px){.whatsapp-layout{height:auto;max-height:none}.whatsapp-list{height:clamp(220px,36dvh,380px);max-height:none;overflow:hidden}.whatsapp-detail{height:clamp(540px,calc(100dvh - 92px),720px)}.whatsapp-message{max-width:88%}}
 @media(max-width:640px){.whatsapp-list{height:clamp(220px,34dvh,330px);max-height:none}.whatsapp-detail{height:calc(100dvh - 82px);min-height:560px}.whatsapp-messages{min-height:0}.whatsapp-message{max-width:94%;min-width:92px}.whatsapp-message.reaction{min-width:0}.whatsapp-new-messages{right:12px;bottom:11px}.whatsapp-composer{max-height:55%}}

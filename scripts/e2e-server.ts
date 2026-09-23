@@ -68,8 +68,8 @@ await database().query(`INSERT INTO whatsapp_messages(organization_id,conversati
  ($1,$2,'wamid.e2e.media.document','document','Documento recebido','5531991112233','e2e-document','application/pdf','fatura.pdf','',now()-interval '70 seconds','processed'),
  ($1,$2,'wamid.e2e.media.expired','image','Imagem expirada','5531991112233','e2e-expired','image/png','antiga.png','',now()-interval '60 seconds','processed')`,[whatsappOrganization,linkedConversation]);
 await database().query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,message_type,text_body,sender_wa_id,meta_timestamp,processing_status)
- SELECT $1,$2,'wamid.e2e.history.'||item,'text','Mensagem histórica de teste '||item,'5531991112233',now()-interval '90 minutes'+item*interval '1 minute','processed'
- FROM generate_series(1,75) item`,[whatsappOrganization,linkedConversation]);
+ SELECT $1,$2,'wamid.e2e.history.'||item,'text','Mensagem histórica de teste '||item,'5531991112233',now()-interval '130 minutes'+item*interval '1 minute','processed'
+ FROM generate_series(1,110) item`,[whatsappOrganization,linkedConversation]);
 await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,last_inbound_at,unread_count,link_status,link_source)
  SELECT $1,'553197'||lpad(item::text,8,'0'),'+553197'||lpad(item::text,8,'0'),'Contato de teste '||item,'Conversa para validar a rolagem da lista','text',now()-(30+item)*interval '1 hour',now()-(30+item)*interval '1 hour',0,'unidentified','none'
  FROM generate_series(1,28) item`,[whatsappOrganization]);

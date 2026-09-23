@@ -11,6 +11,7 @@ import {updateConversationAutomation} from '@/modules/automations/repository';
 
 type Context={params:Promise<{segments?:string[]}>};
 const respond=(value:unknown,status=200)=>NextResponse.json(value,{status,headers:{'Cache-Control':'no-store'}});
+const messageCursor=z.object({before_timestamp:z.string().datetime({offset:true}).optional(),before_id:z.string().uuid().optional()}).refine(value=>Boolean(value.before_timestamp)===Boolean(value.before_id),{message:'Cursor de mensagens inválido.'});
 async function handle(request:Request,context:Context){
  try{
   const actor=await apiActor(),url=new URL(request.url),query=Object.fromEntries(url.searchParams),[id,action,...rest]=(await context.params).segments??[];
@@ -18,7 +19,7 @@ async function handle(request:Request,context:Context){
   if(rest.length)throw new AccessError(404,'Recurso não encontrado.');
   if(request.method==='GET'&&!id)return respond(await listWhatsAppConversations(actor,query));
   if(request.method==='GET'&&id==='records'&&!action)return respond(await searchWhatsAppLinkOptions(actor,z.string().max(120).parse(query.q??'')));
-  if(request.method==='GET'&&id&&!action)return respond(await getWhatsAppConversation(actor,id,z.coerce.number().int().min(1).max(100000).parse(query.page??1)));
+  if(request.method==='GET'&&id&&!action){const cursor=messageCursor.parse(query);return respond(await getWhatsAppConversation(actor,id,cursor.before_timestamp&&cursor.before_id?{before_timestamp:cursor.before_timestamp,before_id:cursor.before_id}:undefined));}
   if(request.method==='POST'&&id&&action==='read')return respond(await markWhatsAppConversationRead(actor,id,await readMutation(request)));
   if(request.method==='POST'&&id&&action==='create-lead')return respond(await createLeadFromWhatsApp(actor,id,await readMutation(request)),201);
   if(request.method==='POST'&&id&&action==='messages')return respond(await sendWhatsAppText(actor,id,await readMutation(request)));

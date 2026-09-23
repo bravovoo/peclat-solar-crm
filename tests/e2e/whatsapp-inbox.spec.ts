@@ -11,8 +11,8 @@ async function login(page:Page){
  await expect(page).toHaveURL(new RegExp('/$'));
 }
 
-async function receiveText(page:Page,id:string,text:string){
- const payload=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'200000000001',changes:[{field:'messages',value:{metadata:{phone_number_id:'100000000001'},messages:[{from:'5531991112233',id,timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:text}}]}}]}]});
+async function receiveText(page:Page,id:string,text:string,from='5531991112233',profile='Cliente Inbox'){
+ const payload=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'200000000001',changes:[{field:'messages',value:{metadata:{phone_number_id:'100000000001'},contacts:[{wa_id:from,profile:{name:profile}}],messages:[{from,id,timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:text}}]}}]}]});
  const signature='sha256='+createHmac('sha256','e2e-fake-app-secret').update(payload).digest('hex');
  return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
 }
@@ -63,6 +63,11 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  const initialList=await scrollMetrics(page,'conversation-list');
  expect(initialList.scrollHeight).toBeGreaterThan(initialList.clientHeight);
  await page.screenshot({path:'test-results/whatsapp-inbox-active-1440.png',fullPage:false});
+ await expect(history.locator('[data-message-id]')).toHaveCount(100);
+ await expect(history.getByText('Mensagem histórica de teste 1',{exact:true})).toHaveCount(0);
+ const loadHistory=page.getByRole('button',{name:'Carregar mensagens anteriores'});await expect(loadHistory).toHaveCount(1);await loadHistory.click();
+ await expect(history.getByText('Mensagem histórica de teste 1',{exact:true})).toHaveCount(1);
+ const historyIds=await history.locator('[data-message-id]').evaluateAll(elements=>elements.map(element=>element.getAttribute('data-message-id')));expect(historyIds.length).toBeGreaterThan(100);expect(new Set(historyIds).size).toBe(historyIds.length);await expect(loadHistory).toHaveCount(0);await history.evaluate(element=>element.scrollTo({top:element.scrollHeight}));
  const assistant=page.getByTestId('commercial-ai-assistant');await expect(assistant).toContainText('Como posso ajudar?');
  await assistant.getByRole('button',{name:'Resumir',exact:true}).click();await expect(assistant.getByText(/procura atendimento solar/)).toBeVisible();
  await assistant.getByRole('button',{name:'Próxima ação',exact:true}).click();await expect(assistant.getByText(/Solicitar a conta de energia/)).toBeVisible();
@@ -94,8 +99,14 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  expect((await scrollMetrics(page,'message-history')).scrollTop).toBeLessThan(20);
  await page.getByRole('button',{name:'Novas mensagens ↓'}).click();
  await expect.poll(async()=>(await scrollMetrics(page,'message-history')).distance).toBeLessThanOrEqual(4);
- await expect(page.getByText(newInbound,{exact:true})).toBeVisible();
- expect((await receiveText(page,`wamid.e2e.ai-failure.${Date.now()}`,'[AI_FAIL] falha simulada local')).status()).toBe(200);await expect(page.getByText('[AI_FAIL] falha simulada local',{exact:true})).toBeVisible({timeout:20000});await assistant.getByRole('button',{name:'Resumir',exact:true}).click();await expect(assistant.getByRole('alert')).toContainText('Não foi possível gerar a sugestão');await expect(page.getByTestId('message-history')).toBeVisible();
+ await expect(history.getByText(newInbound,{exact:true})).toBeVisible();
+ const lateralText='Mensagem nova em conversa não selecionada';expect((await receiveText(page,`wamid.e2e.list.${Date.now()}`,lateralText,'5531987776655','Contato lateral E2E')).status()).toBe(200);
+ const lateral=page.getByRole('button',{name:/Contato lateral E2E/});await expect(lateral).toContainText(lateralText,{timeout:20000});await expect(lateral.getByLabel('1 não lidas')).toBeVisible();await expect(page.getByTestId('conversation-list').locator('button').first()).toContainText('Contato lateral E2E');
+ await lateral.click();await expect(page.getByTestId('conversation-header').getByRole('heading',{name:'Contato lateral E2E'})).toBeVisible();
+ await page.route(`**/api/whatsapp/conversations/${conversationId}`,async route=>{await new Promise(resolve=>setTimeout(resolve,700));await route.continue();},{times:1});
+ await page.getByRole('button',{name:/Cliente Inbox E2E/}).click();await lateral.click();await expect(page.getByTestId('conversation-header').getByRole('heading',{name:'Contato lateral E2E'})).toBeVisible();await page.waitForTimeout(900);await expect(page.getByTestId('conversation-header').getByRole('heading',{name:'Contato lateral E2E'})).toBeVisible();
+ await page.getByRole('button',{name:/Cliente Inbox E2E/}).click();await expect(page.getByTestId('conversation-header').getByRole('heading',{name:'Cliente Inbox E2E'})).toBeVisible();
+ expect((await receiveText(page,`wamid.e2e.ai-failure.${Date.now()}`,'[AI_FAIL] falha simulada local')).status()).toBe(200);await expect(history.getByText('[AI_FAIL] falha simulada local',{exact:true})).toBeVisible({timeout:20000});await assistant.getByRole('button',{name:'Resumir',exact:true}).click();await expect(assistant.getByRole('alert')).toContainText('Não foi possível gerar a sugestão');await expect(page.getByTestId('message-history')).toBeVisible();
 
  await page.getByLabel('Mensagem de WhatsApp').fill('Resposta outbound E2E');
  await page.getByRole('button',{name:'Enviar',exact:true}).click();
