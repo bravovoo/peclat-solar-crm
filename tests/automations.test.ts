@@ -115,6 +115,9 @@ test('pausa, opt-out e kill switch impedem envio; mock Meta recebe somente caso 
   const created=await saveAutomationRule(admin,rule('Resposta controlada','whatsapp.inbound_received',[{type:'send_whatsapp_message',text:'Recebemos sua mensagem.',continue_on_error:false}],{all:[]},720));await setAutomationRuleActive(admin,created.id,true,created.version);
   const enqueue=(eventId:string)=>transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'whatsapp.inbound_received',eventId,entityType:'conversation',entityId:id,conversationId:id}));
   await enqueue('inbound:kill');await processAutomationJobs(20,fake);assert.equal(posts,0);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_jobs WHERE automation_rule_id=$1 AND trigger_event_id='inbound:kill' AND status='completed'",[created.id]),1);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND trigger_event_id='inbound:kill' AND status='skipped' AND skipped_reason='outbound_kill_switch'",[created.id]),1);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_jobs WHERE automation_rule_id=$1 AND safe_error='automation_outbound_kill_switch'",[created.id]),0);
   const initial=await automationSettings(admin);await saveAutomationSettings(admin,{whatsapp_outbound_enabled:true,timezone:initial.timezone,business_hours:initial.business_hours,max_outbound_per_conversation_24h:initial.max_outbound_per_conversation_24h,max_outbound_per_rule_24h:initial.max_outbound_per_rule_24h,version:initial.version});
   await enqueue('inbound:allowed');await processAutomationJobs(20,fake);assert.equal(posts,1);
   await enqueue('inbound:cooldown');await processAutomationJobs(20,fake);assert.equal(posts,1);

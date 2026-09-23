@@ -53,7 +53,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,24);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,25);
   const providerConstraint=(await database().query("SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conname='ai_assistant_settings_provider_check'")).rows[0].definition;assert.match(providerConstraint,/gemini/);assert.match(providerConstraint,/openai/);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
