@@ -26,7 +26,7 @@ test('admin cria, simula, ativa e desativa regra sem executar ação externa',as
  const created=await (await createdResponse).json() as {id:string;organization_id:string;created_by:string;updated_by:string;created_at:string;updated_at:string};
  await expect(page.getByRole('status')).toContainText('Automação criada desativada');
  const card=page.locator('.automation-rule').filter({hasText:'Atendimento E2E'});
- await expect(card.getByText('Desativada')).toBeVisible();
+ await expect(card.getByText('Regra desativada')).toBeVisible();
  await card.getByRole('button',{name:'Editar'}).click();
  await page.getByLabel('Nome',{exact:true}).fill('Atendimento E2E editado');
  await page.getByRole('button',{name:'Simular'}).click();
@@ -44,11 +44,11 @@ test('admin cria, simula, ativa e desativa regra sem executar ação externa',as
  const preserved=await (await page.request.get(`/api/automations/${created.id}`)).json();
  expect(preserved).toMatchObject({name:'Atendimento E2E editado',organization_id:created.organization_id,created_by:created.created_by});
  await card.getByRole('button',{name:'Ativar'}).click();
- await expect(card.getByText('Ativa',{exact:true})).toBeVisible();
+ await expect(card.getByText('Regra ativa',{exact:true})).toBeVisible();
  await card.getByRole('button',{name:'Editar'}).click();
  await page.getByLabel('Descrição').fill('Regra editada depois da ativação');
  await page.getByRole('button',{name:'Salvar regra'}).click();
- await expect(card.getByText('Ativa',{exact:true})).toBeVisible();
+ await expect(card.getByText('Regra ativa',{exact:true})).toBeVisible();
  await card.getByRole('button',{name:'Editar'}).click();
  await page.getByLabel('Nome',{exact:true}).fill('Alteração cancelada');
  await page.getByRole('button',{name:'Cancelar'}).click();
@@ -58,13 +58,17 @@ test('admin cria, simula, ativa e desativa regra sem executar ação externa',as
  await expect(page.getByLabel('Nome',{exact:true})).toHaveValue('Atendimento E2E editado');
  await page.getByRole('button',{name:'Salvar regra'}).click();
  await card.getByRole('button',{name:'Desativar'}).click();
- await expect(card.getByText('Desativada')).toBeVisible();
+ await expect(card.getByText('Regra desativada')).toBeVisible();
  await page.reload();
- await expect(card.getByText('Desativada')).toBeVisible();
+ await expect(card.getByText('Regra desativada')).toBeVisible();
  await page.getByRole('button',{name:'Execuções'}).click();
  await expect(page.getByRole('heading',{name:'Execuções recentes'})).toBeVisible();
  await page.getByRole('button',{name:'Horário e segurança'}).click();
  await expect(page.getByText('Automação de WhatsApp')).toBeVisible();
+ const globalSwitch=page.getByRole('checkbox',{name:'PAUSADA'});await expect(globalSwitch).not.toBeChecked();await globalSwitch.check();
+ await expect(page.getByText('ALTERAÇÃO NÃO SALVA')).toBeVisible();
+ await expect(page.getByText('Alteração ainda não aplicada. Clique em salvar para atualizar o backend.')).toBeVisible();
+ await page.getByRole('checkbox',{name:'ALTERAÇÃO NÃO SALVA'}).uncheck();await expect(page.getByText('PAUSADA',{exact:true})).toBeVisible();
  for(const size of [{width:390,height:844},{width:1440,height:900}]){
   await page.setViewportSize(size);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();

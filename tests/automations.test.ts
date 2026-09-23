@@ -81,7 +81,7 @@ test('evento repetido e cooldown impedem duplicação; depois do período libera
  await transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'lead.created',eventId:`lead:${lead.id}:created`,entityType:'record',entityId:lead.id,recordId:lead.id}));
  await transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'lead.created',eventId:`lead:${lead.id}:again`,entityType:'record',entityId:lead.id,recordId:lead.id}));
  await processAutomationJobs();assert.equal(await counts("SELECT count(*)::int total FROM crm_tasks WHERE record_id=$1 AND title='Retorno com cooldown'",[lead.id]),1);
- assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND status='skipped' AND skipped_reason='cooldown_active'",[created.id]),1);
+ assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND status='skipped' AND skipped_reason='automation_cooldown_active'",[created.id]),1);
  await database().query("UPDATE automation_runs SET created_at=now()-interval '3 hours' WHERE rule_id=$1 AND status='completed'",[created.id]);
  await transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'lead.created',eventId:`lead:${lead.id}:later`,entityType:'record',entityId:lead.id,recordId:lead.id}));await processAutomationJobs();
  assert.equal(await counts("SELECT count(*)::int total FROM crm_tasks WHERE record_id=$1 AND title='Retorno com cooldown'",[lead.id]),2);
@@ -116,18 +116,51 @@ test('pausa, opt-out e kill switch impedem envio; mock Meta recebe somente caso 
   const enqueue=(eventId:string)=>transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'whatsapp.inbound_received',eventId,entityType:'conversation',entityId:id,conversationId:id}));
   await enqueue('inbound:kill');await processAutomationJobs(20,fake);assert.equal(posts,0);
   assert.equal(await counts("SELECT count(*)::int total FROM automation_jobs WHERE automation_rule_id=$1 AND trigger_event_id='inbound:kill' AND status='completed'",[created.id]),1);
-  assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND trigger_event_id='inbound:kill' AND status='skipped' AND skipped_reason='outbound_kill_switch'",[created.id]),1);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND trigger_event_id='inbound:kill' AND status='skipped' AND skipped_reason='automation_outbound_kill_switch'",[created.id]),1);
   assert.equal(await counts("SELECT count(*)::int total FROM automation_jobs WHERE automation_rule_id=$1 AND safe_error='automation_outbound_kill_switch'",[created.id]),0);
   const initial=await automationSettings(admin);await saveAutomationSettings(admin,{whatsapp_outbound_enabled:true,timezone:initial.timezone,business_hours:initial.business_hours,max_outbound_per_conversation_24h:initial.max_outbound_per_conversation_24h,max_outbound_per_rule_24h:initial.max_outbound_per_rule_24h,version:initial.version});
   await enqueue('inbound:allowed');await processAutomationJobs(20,fake);assert.equal(posts,1);
   await enqueue('inbound:cooldown');await processAutomationJobs(20,fake);assert.equal(posts,1);
   let version=Number((await database().query('SELECT version FROM whatsapp_conversations WHERE id=$1',[id])).rows[0].version);await updateConversationAutomation(admin,id,{automations_paused:true,version});
   await enqueue('inbound:paused');await processAutomationJobs(20,fake);assert.equal(posts,1);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND trigger_event_id='inbound:paused' AND status='skipped' AND skipped_reason='automation_conversation_paused'",[created.id]),1);
   version=Number((await database().query('SELECT version FROM whatsapp_conversations WHERE id=$1',[id])).rows[0].version);await updateConversationAutomation(admin,id,{automations_paused:false,version});
   version=Number((await database().query('SELECT version FROM whatsapp_conversations WHERE id=$1',[id])).rows[0].version);await updateConversationAutomation(admin,id,{automation_blocked:true,version});
   await enqueue('inbound:blocked');await processAutomationJobs(20,fake);assert.equal(posts,1);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND trigger_event_id='inbound:blocked' AND status='skipped' AND skipped_reason='automation_contact_opt_out'",[created.id]),1);
   assert.equal(await counts("SELECT count(*)::int total FROM whatsapp_messages WHERE conversation_id=$1 AND origin='automation'",[id]),1);
   await setAutomationRuleActive(admin,created.id,false,created.version+1);
+ }finally{if(oldToken===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=oldToken;}
+});
+test('horário e limites externos geram códigos distintos sem chamar a Meta quando bloqueados',async()=>{
+ const oldToken=process.env.WHATSAPP_ACCESS_TOKEN;process.env.WHATSAPP_ACCESS_TOKEN='token-falso-automation-blocks';let posts=0;
+ const fake=async(_input:string,init?:RequestInit)=>{if(init?.method==='POST'){posts++;return new Response(JSON.stringify({messages:[{id:`wamid.blocks.${posts}`}]}),{status:200,headers:{'content-type':'application/json'}});}throw new Error('unexpected_meta_call');};
+ const external={type:'send_whatsapp_message',text:'Resposta automática segura.',continue_on_error:false};
+ const configure=async(enabled:boolean,hours:Record<string,{enabled:boolean;start:string;end:string}>,conversationLimit:number,ruleLimit:number)=>{const current=await automationSettings(admin);await saveAutomationSettings(admin,{whatsapp_outbound_enabled:enabled,timezone:'America/Sao_Paulo',business_hours:hours,max_outbound_per_conversation_24h:conversationLimit,max_outbound_per_rule_24h:ruleLimit,version:current.version});};
+ const hours=(enabled:boolean)=>Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled,start:'00:00',end:'23:59'}]));
+ const conversation=async(suffix:string)=>(await database().query<{id:string}>(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,last_inbound_at) VALUES ($1,$2,$3,now()) RETURNING id`,[org,`553197700${suffix}`,`+553197700${suffix}`])).rows[0].id;
+ const enqueue=(id:string,eventId:string)=>transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'whatsapp.inbound_received',eventId,entityType:'conversation',entityId:id,conversationId:id}));
+ try{
+  await configure(true,hours(false),3,100);
+  const outside=await saveAutomationRule(admin,rule('Somente no expediente','whatsapp.inbound_received',[external],{all:[{type:'inside_business_hours'}]},0));await setAutomationRuleActive(admin,outside.id,true,outside.version);
+  const outsideConversation=await conversation('1001');await enqueue(outsideConversation,'blocks:outside');await processAutomationJobs(20,fake);
+  assert.equal(posts,0);assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND trigger_event_id='blocks:outside' AND status='skipped' AND skipped_reason='automation_outside_business_hours'",[outside.id]),1);
+  await setAutomationRuleActive(admin,outside.id,false,outside.version+1);
+
+  await configure(true,hours(true),1,100);
+  const perConversation=await saveAutomationRule(admin,rule('Limite por conversa','whatsapp.inbound_received',[external],{all:[]},0));await setAutomationRuleActive(admin,perConversation.id,true,perConversation.version);
+  const limitedConversation=await conversation('1002');await enqueue(limitedConversation,'blocks:conversation:first');await processAutomationJobs(20,fake);assert.equal(posts,1);
+  await enqueue(limitedConversation,'blocks:conversation:second');await processAutomationJobs(20,fake);assert.equal(posts,1);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_run_actions a JOIN automation_runs r ON r.organization_id=a.organization_id AND r.id=a.run_id WHERE r.rule_id=$1 AND r.trigger_event_id='blocks:conversation:second' AND a.status='skipped' AND a.safe_error='automation_outbound_conversation_limit'",[perConversation.id]),1);
+  await setAutomationRuleActive(admin,perConversation.id,false,perConversation.version+1);
+
+  await configure(true,hours(true),20,1);
+  const perRule=await saveAutomationRule(admin,rule('Limite por regra','whatsapp.inbound_received',[external],{all:[]},0));await setAutomationRuleActive(admin,perRule.id,true,perRule.version);
+  const first=await conversation('1003'),second=await conversation('1004');await enqueue(first,'blocks:rule:first');await processAutomationJobs(20,fake);assert.equal(posts,2);
+  await enqueue(second,'blocks:rule:second');await processAutomationJobs(20,fake);assert.equal(posts,2);
+  assert.equal(await counts("SELECT count(*)::int total FROM automation_run_actions a JOIN automation_runs r ON r.organization_id=a.organization_id AND r.id=a.run_id WHERE r.rule_id=$1 AND r.trigger_event_id='blocks:rule:second' AND a.status='skipped' AND a.safe_error='automation_outbound_rule_limit'",[perRule.id]),1);
+  await setAutomationRuleActive(admin,perRule.id,false,perRule.version+1);
+  await configure(false,hours(true),3,100);
  }finally{if(oldToken===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=oldToken;}
 });
 test('scheduler agenda tarefa vencida uma vez e não reprocessa cron duplicado',async()=>{

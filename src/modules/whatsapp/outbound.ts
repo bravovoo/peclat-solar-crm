@@ -12,15 +12,17 @@ type TemplateRow={id:string;meta_template_id:string;name:string;language:string;
 type OutboundRow={id:string;conversation_id:string;message_type:string;text_body:string;template_id:string|null;template_parameters:unknown;delivery_status:string;outcome_uncertain:boolean;meta_message_id:string|null;filename:string;caption:string;safe_metadata:Record<string,unknown>};
 export type AutomationOutboundContext={runId:string;actionIndex:number};
 async function assertAutomationEligible(db:Db,actor:Actor,conversationId:string,automation:AutomationOutboundContext,conversation:{automations_paused?:boolean;automation_blocked?:boolean}){
- if(conversation.automations_paused||conversation.automation_blocked)throw new AccessError(409,'Automações pausadas ou bloqueadas nesta conversa.');
+ if(conversation.automations_paused)throw new Error('automation_conversation_paused');
+ if(conversation.automation_blocked)throw new Error('automation_contact_opt_out');
  const run=await db.query<{rule_id:string}>("SELECT rule_id FROM automation_runs WHERE organization_id=$1 AND id=$2 AND status='running'",[actor.organizationId,automation.runId]);
  if(!run.rowCount)throw new AccessError(409,'Execução automática indisponível.');
  const ruleId=run.rows[0].rule_id;
  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${actor.organizationId}:automation_outbound:${ruleId}`]);
  const settings=await db.query<{whatsapp_outbound_enabled:boolean;max_outbound_per_conversation_24h:number;max_outbound_per_rule_24h:number}>('SELECT whatsapp_outbound_enabled,max_outbound_per_conversation_24h,max_outbound_per_rule_24h FROM organization_automation_settings WHERE organization_id=$1',[actor.organizationId]);
- const config=settings.rows[0];if(!config?.whatsapp_outbound_enabled)throw new AccessError(409,'O envio automático está pausado.');
+ const config=settings.rows[0];if(!config?.whatsapp_outbound_enabled)throw new Error('automation_outbound_kill_switch');
  const counts=await db.query<{conversation_count:number;rule_count:number}>(`SELECT (SELECT count(*)::int FROM whatsapp_messages WHERE organization_id=$1 AND conversation_id=$2 AND origin='automation' AND created_at>now()-interval '24 hours') conversation_count,(SELECT count(*)::int FROM whatsapp_messages m JOIN automation_runs r ON r.organization_id=m.organization_id AND r.id=m.automation_run_id WHERE r.organization_id=$1 AND r.rule_id=$3 AND m.created_at>now()-interval '24 hours') rule_count`,[actor.organizationId,conversationId,ruleId]);
- if(Number(counts.rows[0].conversation_count)>=config.max_outbound_per_conversation_24h||Number(counts.rows[0].rule_count)>=config.max_outbound_per_rule_24h)throw new AccessError(409,'Limite de envios automáticos atingido.');
+ if(Number(counts.rows[0].conversation_count)>=config.max_outbound_per_conversation_24h)throw new Error('automation_outbound_conversation_limit');
+ if(Number(counts.rows[0].rule_count)>=config.max_outbound_per_rule_24h)throw new Error('automation_outbound_rule_limit');
 }
 const object=(value:unknown)=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
 const array=(value:unknown)=>Array.isArray(value)?value:[];
