@@ -77,6 +77,7 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  const assistant=page.getByTestId('commercial-ai-assistant');await expect(assistant).toContainText('Como posso ajudar?');
  await assistant.getByRole('button',{name:'Resumir',exact:true}).click();await expect(assistant.getByText(/procura atendimento solar/)).toBeVisible();
  await assistant.getByRole('button',{name:'Próxima ação',exact:true}).click();await expect(assistant.getByText(/Solicitar a conta de energia/)).toBeVisible();
+ await assistant.getByRole('button',{name:'Dados faltantes',exact:true}).click();await expect(assistant.getByText('Conta de energia atualizada',{exact:true})).toBeVisible();
  await assistant.getByRole('button',{name:'Sugerir resposta',exact:true}).click();await expect(assistant.getByText(/Posso ajudar com seu atendimento/)).toBeVisible();
  await assistant.getByRole('button',{name:'Inserir no campo de mensagem'}).click();const aiDraft=page.getByLabel('Mensagem de WhatsApp');await expect(aiDraft).toHaveValue(/Posso ajudar com seu atendimento/);await aiDraft.fill('Sugestão revisada pelo humano, ainda não enviada.');await expect(page.getByTestId('message-history').getByText('Sugestão revisada pelo humano, ainda não enviada.',{exact:true})).toHaveCount(0);
  await page.setViewportSize({width:390,height:844});
@@ -92,6 +93,7 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await page.getByRole('button',{name:'Informações do contato'}).click();
  await expect(page.getByTestId('contact-info')).toBeVisible();
  await page.getByTestId('commercial-ai-assistant').getByRole('button',{name:'Follow-up',exact:true}).click();await expect(page.getByTestId('commercial-ai-assistant').getByText(/Passando para saber/)).toBeVisible();await page.getByTestId('commercial-ai-assistant').getByRole('button',{name:'Inserir no campo de mensagem'}).click();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+ await page.getByTestId('commercial-ai-assistant').getByRole('button',{name:'Apoio ao fechamento',exact:true}).click();await expect(page.getByTestId('commercial-ai-assistant').getByText(/existe algum ponto/i)).toBeVisible();
  await page.getByRole('button',{name:'Fechar informações'}).first().click();
  await expect(page.getByTestId('contact-info')).toBeHidden();
  await page.screenshot({path:'test-results/whatsapp-inbox-active-390.png',fullPage:false});
