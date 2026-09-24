@@ -23,6 +23,12 @@ async function receiveEchoText(page:Page,id:string,text:string,to='5531991112233
  return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
 }
 
+async function receiveUnsupported(page:Page,id:string){
+ const payload=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'200000000001',changes:[{field:'messages',value:{metadata:{phone_number_id:'100000000001'},messages:[{from:'5531991112233',id,timestamp:String(Math.floor(Date.now()/1000)),type:'unsupported',errors:[{code:131051,title:'Dado privado simulado'}]}]}}]}]});
+ const signature='sha256='+createHmac('sha256','e2e-fake-app-secret').update(payload).digest('hex');
+ return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
+}
+
 async function scrollMetrics(page:Page,testId:string){
  return page.getByTestId(testId).evaluate(element=>({clientHeight:element.clientHeight,scrollHeight:element.scrollHeight,scrollTop:element.scrollTop,distance:element.scrollHeight-element.scrollTop-element.clientHeight}));
 }
@@ -109,6 +115,11 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect.poll(async()=>(await scrollMetrics(page,'message-history')).distance).toBeLessThanOrEqual(4);
  await expect(history.getByText(newInbound,{exact:true})).toBeVisible();
  const mobileEcho='Resposta simulada do WhatsApp Business';expect((await receiveEchoText(page,`wamid.e2e.echo.${Date.now()}`,mobileEcho)).status()).toBe(200);await expect(history.getByText(mobileEcho,{exact:true})).toBeVisible({timeout:20000});await expect(page.getByRole('button',{name:/Cliente Inbox E2E/})).toContainText(mobileEcho);
+ expect((await receiveUnsupported(page,`wamid.e2e.unsupported.${Date.now()}`)).status()).toBe(200);
+ await expect(history.getByText('O conteúdo desta mensagem não está disponível no CRM. Consulte o WhatsApp Business para visualizá-lo.')).toBeVisible({timeout:20000});
+ await expect(history.getByText('Tipo informado pela Meta: unsupported')).toBeVisible();
+ await expect(page.getByRole('button',{name:/Cliente Inbox E2E/})).toContainText('Conteúdo recebido indisponível');
+ await expect(history.getByText('Dado privado simulado')).toHaveCount(0);
  const lateralText='Mensagem nova em conversa não selecionada';expect((await receiveText(page,`wamid.e2e.list.${Date.now()}`,lateralText,'5531987776655','Contato lateral E2E')).status()).toBe(200);
  const lateral=page.getByRole('button',{name:/Contato lateral E2E/});await expect(lateral).toContainText(lateralText,{timeout:20000});await expect(lateral.getByLabel('1 não lidas')).toBeVisible();await expect(page.getByTestId('conversation-list').locator('button').first()).toContainText('Contato lateral E2E');
  await lateral.click();await expect(page.getByTestId('conversation-header').getByRole('heading',{name:'Contato lateral E2E'})).toBeVisible();

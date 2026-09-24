@@ -25,7 +25,12 @@ function parseMessage(entry:Json,value:Json,message:Json,direction:'inbound'|'ou
  else if(type==='contacts'){safe={count:array(message.contacts).length};preview='Contato recebido';}
  else if(type==='reaction'){const reaction=object(message.reaction);safe={message_id:text(reaction.message_id,240),emoji:text(reaction.emoji,20)};preview='Reação recebida';}
  else if(type==='interactive'){const interactive=object(message.interactive),reply=object(interactive.button_reply??interactive.list_reply);safe={interaction_type:text(interactive.type,40),reply_id:text(reply.id,180),title:text(reply.title,180)};preview=text(reply.title,180)||'Interação recebida';}
- else{preview='Mensagem não suportada';status='unsupported';}
+ else{
+  const reportedType=typeof message.type==='string'&&/^[a-z][a-z0-9_]{0,39}$/.test(message.type)?message.type:'unknown';
+  const errorCodes=array(message.errors).slice(0,3).map(item=>object(item).code).filter((code):code is number=>typeof code==='number'&&Number.isSafeInteger(code)&&code>=0&&code<=9999999);
+  safe={reported_type:reportedType,...(errorCodes.length?{error_codes:errorCodes}:{})};
+  preview=direction==='outbound'?'Conteúdo enviado indisponível':'Conteúdo recebido indisponível';status='unsupported';
+ }
  return {businessId,phoneNumberId,waId,profileName,id,timestamp,type,body,preview:preview.slice(0,500),contextId,mediaId,mimeType,filename,caption,metadata:safe,status,direction,source:direction==='outbound'?'smb_message_echoes':'messages'};
 }
 function parseStatus(entry:Json,value:Json,raw:Json):IncomingStatus|null{const status=text(raw.status,30);if(!['sent','delivered','read','failed'].includes(status))return null;const metadata=object(value.metadata),id=text(raw.id,240),phoneNumberId=text(metadata.phone_number_id,100),businessId=text(entry.id,100),timestamp=new Date(Number(text(raw.timestamp,30))*1000);if(!id||!phoneNumberId||!businessId||Number.isNaN(timestamp.getTime()))throw new AccessError(400,'Payload de webhook inválido.');const error=object(array(raw.errors)[0]);return {businessId,phoneNumberId,id,timestamp,status:status as IncomingStatus['status'],failureCode:text(error.code,80),failureTitle:text(error.title,180),failureDetail:text(object(error.error_data).details??error.message,500)};}
