@@ -44,6 +44,8 @@ const whatsappUser=(await database().query("INSERT INTO users(email,name,passwor
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[whatsappUser.id]);
 const automationUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('automations@e2e.local','Admin Automações E2E',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[automationUser.id]);
+const monitoringUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('monitoring@e2e.local','Admin Monitoramento E2E',$1) RETURNING id",[hash])).rows[0];
+await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[monitoringUser.id]);
 const whatsappOrganization=(await database().query("SELECT id FROM organizations WHERE slug='peclat-solar'")).rows[0].id;
 await database().query("INSERT INTO ai_assistant_settings(organization_id,enabled,provider,model,context_message_limit,max_requests_per_hour,updated_by) VALUES ($1,true,'openai','fake-commercial-v1',40,60,$2)",[whatsappOrganization,whatsappUser.id]);
 const whatsappCustomer=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,whatsapp) VALUES ($1,'customer',$2,'Cliente Inbox E2E','5531991112233') RETURNING id",[whatsappOrganization,whatsappUser.id])).rows[0].id;

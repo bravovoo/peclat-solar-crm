@@ -26,6 +26,7 @@ import {whatsappMediaResponse} from '../src/modules/whatsapp/media';
 import {aiAssistantSettings,commercialAiProviderTimeoutMs,runCommercialAi,saveAiAssistantSettings} from '../src/modules/ai/assistant';
 import {AiProviderError,type CommercialAiProvider} from '../src/modules/ai/provider';
 import {cleanupExpiredOperationalData} from '../src/modules/operations/maintenance';
+import {acknowledgeOperationalAlert,operationalSummary,runOperationalMonitoring} from '../src/modules/operations/monitoring';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
 const password='Teste exclusivo 2026!';
@@ -53,7 +54,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,25);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,26);
   const providerConstraint=(await database().query("SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conname='ai_assistant_settings_provider_check'")).rows[0].definition;assert.match(providerConstraint,/gemini/);assert.match(providerConstraint,/openai/);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
@@ -102,7 +103,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,77);
+  assert.equal(tables.rowCount,79);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
@@ -117,6 +118,17 @@ test('manutenção remove somente sessões, resets e rate limits expirados',asyn
  await database().query('INSERT INTO sessions(token_hash,organization_id,user_id,expires_at) VALUES ($1,$2,$3,$4),($5,$2,$3,$6)',[tokenHash('expired-maintenance'),orgA,user,past,tokenHash('active-maintenance'),future]);await database().query('INSERT INTO password_resets(token_hash,user_id,organization_id,expires_at) VALUES ($1,$2,$3,$4),($5,$2,$3,$6)',[tokenHash('expired-reset'),user,orgA,past,tokenHash('active-reset'),future]);await database().query('INSERT INTO rate_limits(key_hash,attempts,expires_at) VALUES ($1,1,$2),($3,1,$4)',[tokenHash('expired-limit'),past,tokenHash('active-limit'),future]);
  const result=await cleanupExpiredOperationalData();assert.ok(Number(result.sessions)>=1);assert.ok(Number(result.password_resets)>=1);assert.ok(Number(result.rate_limits)>=1);assert.equal((await database().query('SELECT count(*)::int total FROM sessions WHERE token_hash=$1',[tokenHash('active-maintenance')])).rows[0].total,1);assert.equal((await database().query('SELECT count(*)::int total FROM password_resets WHERE token_hash=$1',[tokenHash('active-reset')])).rows[0].total,1);assert.equal((await database().query('SELECT count(*)::int total FROM rate_limits WHERE key_hash=$1',[tokenHash('active-limit')])).rows[0].total,1);
  await database().query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash('active-maintenance')]);await database().query('DELETE FROM password_resets WHERE token_hash=$1',[tokenHash('active-reset')]);await database().query('DELETE FROM rate_limits WHERE key_hash=$1',[tokenHash('active-limit')]);
+});
+test('monitoramento abre, reconhece e resolve alertas sem vazar outra organização',async()=>{
+ const source=(await database().query<{id:string}>("INSERT INTO storage_deletion_jobs(organization_id,source_type,source_id,storage_key,status,attempts,safe_error) VALUES ($1::uuid,'installation_file',gen_random_uuid(),$1::text||'/installations/test/file.pdf','failed',5,'storage_delete_failed') RETURNING id",[orgA])).rows[0];
+ await runOperationalMonitoring();
+ let summary=await operationalSummary(admin);const alert=summary.alerts.find(item=>item.code==='storage_deletion_queue');
+ assert.equal(summary.monitor?.status,'degraded');assert.equal(alert?.status,'open');assert.equal(alert?.severity,'critical');assert.ok(!JSON.stringify(summary).includes(orgB));
+ const seller=(await sessionActor(sellerToken))!;await assert.rejects(()=>operationalSummary(seller),{status:403});
+ const acknowledged=await acknowledgeOperationalAlert(admin,alert!.id);assert.equal(acknowledged.status,'acknowledged');
+ await database().query('DELETE FROM storage_deletion_jobs WHERE id=$1',[source.id]);await runOperationalMonitoring();summary=await operationalSummary(admin);
+ assert.equal(summary.monitor?.status,'healthy');assert.equal(summary.alerts.find(item=>item.id===alert!.id)?.status,'resolved');
+ await database().query('DELETE FROM operational_alerts WHERE organization_id IN ($1,$2)',[orgA,orgB]);await database().query('DELETE FROM operational_monitor_status WHERE organization_id IN ($1,$2)',[orgA,orgB]);
 });
 test('permissões efetivas e consultas não vazam membros ou auditoria de outro tenant',async()=>{
   assert.equal(admin.organizationId,orgA);const team=await teamMembers(admin);
