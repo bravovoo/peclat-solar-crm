@@ -8,7 +8,7 @@
 - FASE 6 — Instalação, checklists, fotos, homologação e pós-venda. As etapas 6.1–6.4 estão concluídas: instalações, execução/entrega e garantias, chamados e manutenção. WhatsApp, automações, portal do cliente, estoque, telemetria e Fase 7 permanecem fora deste escopo.
 - FASE 7 — WhatsApp Cloud API oficial, inbox, webhooks, templates e distribuição.
 - FASE 8 — Automações, notificações, relatórios e ampliação da auditoria.
-- FASE 9 — Performance, segurança, testes, UX e mobile. Etapa 9.1 implementa monitoramento interno, incidentes deduplicados e visibilidade das integrações e filas.
+- FASE 9 — Performance, segurança, testes, UX e mobile. Etapas 9.1–9.2 implementam monitoramento interno, incidentes deduplicados, visibilidade das integrações e alertas externos por e-mail com escalonamento controlado.
 - FASE 10 — Deploy, backup, monitoramento e documentação operacional.
 
 FASE 5 concluída. A FASE 6.1 implementa a base de instalações; fotos, checklist, homologação e pós-venda permanecem para etapas posteriores. Cada etapa exige revisão de arquitetura, banco e dependências; testes, lint e build.

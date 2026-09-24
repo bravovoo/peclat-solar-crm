@@ -27,6 +27,7 @@ import {aiAssistantSettings,commercialAiProviderTimeoutMs,runCommercialAi,saveAi
 import {AiProviderError,type CommercialAiProvider} from '../src/modules/ai/provider';
 import {cleanupExpiredOperationalData} from '../src/modules/operations/maintenance';
 import {acknowledgeOperationalAlert,operationalSummary,runOperationalMonitoring} from '../src/modules/operations/monitoring';
+import {processOperationalAlertDeliveries,saveOperationalNotificationSettings} from '../src/modules/operations/notifications';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
 const password='Teste exclusivo 2026!';
@@ -54,7 +55,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,26);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,27);
   const providerConstraint=(await database().query("SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conname='ai_assistant_settings_provider_check'")).rows[0].definition;assert.match(providerConstraint,/gemini/);assert.match(providerConstraint,/openai/);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
@@ -103,7 +104,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,79);
+  assert.equal(tables.rowCount,81);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
@@ -129,6 +130,27 @@ test('monitoramento abre, reconhece e resolve alertas sem vazar outra organizaç
  await database().query('DELETE FROM storage_deletion_jobs WHERE id=$1',[source.id]);await runOperationalMonitoring();summary=await operationalSummary(admin);
  assert.equal(summary.monitor?.status,'healthy');assert.equal(summary.alerts.find(item=>item.id===alert!.id)?.status,'resolved');
  await database().query('DELETE FROM operational_alerts WHERE organization_id IN ($1,$2)',[orgA,orgB]);await database().query('DELETE FROM operational_monitor_status WHERE organization_id IN ($1,$2)',[orgA,orgB]);
+});
+test('alertas externos deduplicam abertura, escalam crítico e notificam recuperação sem e-mail real',async()=>{
+ const seller=(await sessionActor(sellerToken))!;await assert.rejects(()=>saveOperationalNotificationSettings(seller,{email_enabled:false,recipients:[],minimum_severity:'critical',notify_recovery:true,critical_escalation_minutes:60,version:1}),{status:403});
+ const oldSmtp=process.env.SMTP_HOST;process.env.SMTP_HOST='smtp.test.invalid';
+ try{
+  const settings=await saveOperationalNotificationSettings(admin,{email_enabled:true,recipients:[' Operacao@Test.Local ','operacao@test.local'],minimum_severity:'critical',notify_recovery:true,critical_escalation_minutes:15,version:1});
+  assert.deepEqual(settings.recipients,['operacao@test.local']);assert.equal(settings.version,1);
+  const source=(await database().query<{id:string}>("INSERT INTO storage_deletion_jobs(organization_id,source_type,source_id,storage_key,status,attempts,safe_error) VALUES ($1::uuid,'installation_file',gen_random_uuid(),$1::text||'/installations/notification/file.pdf','failed',5,'storage_delete_failed') RETURNING id",[orgA])).rows[0];
+  await runOperationalMonitoring();await runOperationalMonitoring();
+  let deliveries=await database().query("SELECT d.id,d.notification_kind,d.status FROM operational_alert_deliveries d JOIN operational_alerts a ON a.id=d.alert_id WHERE d.organization_id=$1 AND a.code='storage_deletion_queue' ORDER BY d.created_at",[orgA]);
+  assert.deepEqual(deliveries.rows.map(row=>row.notification_kind),['opened']);
+  const sent:{to:string;subject:string;message:string}[]=[];const mail={sendOperationalAlert:async(input:{to:string;subject:string;message:string})=>{sent.push(input);return {messageId:`mock-${sent.length}`};}};
+  assert.deepEqual(await processOperationalAlertDeliveries(10,mail),{processed:1,sent:1,failed:0,configured:true});assert.equal(sent[0].to,'operacao@test.local');assert.ok(!sent[0].message.includes(orgA));
+  await database().query("UPDATE operational_alerts SET first_detected_at=now()-interval '20 minutes' WHERE organization_id=$1 AND code='storage_deletion_queue'",[orgA]);await runOperationalMonitoring();
+  assert.deepEqual(await processOperationalAlertDeliveries(10,mail),{processed:1,sent:1,failed:0,configured:true});assert.match(sent[1].subject,/ESCALADO/);
+  await database().query('DELETE FROM storage_deletion_jobs WHERE id=$1',[source.id]);await runOperationalMonitoring();
+  assert.deepEqual(await processOperationalAlertDeliveries(10,mail),{processed:1,sent:1,failed:0,configured:true});assert.match(sent[2].subject,/RECUPERADO/);
+  deliveries=await database().query("SELECT notification_kind,status FROM operational_alert_deliveries WHERE organization_id=$1 ORDER BY created_at",[orgA]);assert.deepEqual(deliveries.rows.map(row=>[row.notification_kind,row.status]),[['opened','sent'],['escalated','sent'],['resolved','sent']]);
+  const outsider=(await sessionActor(await login({organization:'outra-empresa',email:'outsider@test.local',password})))!;assert.equal((await operationalSummary(outsider)).deliveries.length,0);
+  await database().query('DELETE FROM operational_alerts WHERE organization_id=$1',[orgA]);await database().query('DELETE FROM operational_monitor_status WHERE organization_id=$1',[orgA]);
+ }finally{if(oldSmtp===undefined)delete process.env.SMTP_HOST;else process.env.SMTP_HOST=oldSmtp;}
 });
 test('permissões efetivas e consultas não vazam membros ou auditoria de outro tenant',async()=>{
   assert.equal(admin.organizationId,orgA);const team=await teamMembers(admin);

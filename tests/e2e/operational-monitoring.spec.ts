@@ -11,6 +11,13 @@ test('admin acompanha integrações e filas em desktop e mobile',async({page})=>
  await expect(page.getByRole('heading',{name:'Monitoramento do CRM'})).toBeVisible();
  await expect(page.getByText('Nenhuma chave ou segredo é exibido.')).toBeVisible();
  await expect(page.getByText('Banco de dados')).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Alertas externos por e-mail'})).toBeVisible();
+ await page.getByLabel('Ativar alertas por e-mail').check();
+ await page.getByLabel('Destinatários dos alertas').fill('operacao@e2e.local');
+ const saved=page.waitForResponse(item=>item.url().endsWith('/api/operations/monitoring')&&item.request().method()==='POST');
+ await page.getByRole('button',{name:'Salvar alertas externos'}).click();
+ expect((await saved).status()).toBe(200);
+ await expect(page.getByText('Configuração salva.')).toBeVisible();
  const response=page.waitForResponse(item=>item.url().endsWith('/api/operations/monitoring')&&item.request().method()==='GET');
  await page.getByRole('button',{name:'Atualizar'}).click();
  expect((await response).status()).toBe(200);

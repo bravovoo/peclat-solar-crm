@@ -1,9 +1,11 @@
 import {z} from 'zod';
 import {database,transaction} from '@/server/db';
 import {AccessError,requirePermission,type Actor} from '@/modules/auth/policy';
+import {enqueueAlertNotifications,enqueueOperationalEscalations,operationalNotificationSettings,recentOperationalDeliveries} from './notifications';
 
 type Severity='warning'|'critical';
 type Signal={code:string;severity:Severity;title:string;detail:string};
+type AlertNotice={id:string;severity:Severity;title:string;detail:string};
 type Snapshot={webhook_failed:number;webhook_overdue:number;storage_failed:number;storage_overdue:number;automation_failed:number;automation_overdue:number;email_failed:number;email_overdue:number;whatsapp_uncertain:number;whatsapp_failed:number;ai_failed:number;ai_total:number};
 export type OperationalAlert={id:string;code:string;severity:Severity;status:'open'|'acknowledged'|'resolved';title:string;detail:string;occurrence_count:number;first_detected_at:string;last_detected_at:string;acknowledged_at:string|null;resolved_at:string|null};
 
@@ -46,11 +48,12 @@ export async function runOperationalMonitoring(){
  for(const organization of organizations){
   const started=Date.now(),detected=signals(await snapshot(organization.id));alerts+=detected.length;
   await transaction(async db=>{
-   const active=(await db.query<{id:string;code:string;status:string}>("SELECT id,code,status FROM operational_alerts WHERE organization_id=$1 AND status IN ('open','acknowledged') FOR UPDATE",[organization.id])).rows;
+   const active=(await db.query<{id:string;code:string;status:string;severity:Severity;title:string;detail:string}>("SELECT id,code,status,severity,title,detail FROM operational_alerts WHERE organization_id=$1 AND status IN ('open','acknowledged') FOR UPDATE",[organization.id])).rows;
    const byCode=new Map(active.map(row=>[row.code,row]));
-   for(const signal of detected){const existing=byCode.get(signal.code);if(existing){await db.query('UPDATE operational_alerts SET severity=$3,title=$4,detail=$5,occurrence_count=occurrence_count+1,last_detected_at=now(),updated_at=now() WHERE organization_id=$1 AND id=$2',[organization.id,existing.id,signal.severity,signal.title,signal.detail]);}else{await db.query('INSERT INTO operational_alerts(organization_id,code,severity,title,detail) VALUES ($1,$2,$3,$4,$5)',[organization.id,signal.code,signal.severity,signal.title,signal.detail]);console.warn('operational_alert_opened',{code:signal.code,severity:signal.severity});}}
+   for(const signal of detected){const existing=byCode.get(signal.code);if(existing){await db.query('UPDATE operational_alerts SET severity=$3,title=$4,detail=$5,occurrence_count=occurrence_count+1,last_detected_at=now(),updated_at=now() WHERE organization_id=$1 AND id=$2',[organization.id,existing.id,signal.severity,signal.title,signal.detail]);}else{const alert=(await db.query<AlertNotice>('INSERT INTO operational_alerts(organization_id,code,severity,title,detail) VALUES ($1,$2,$3,$4,$5) RETURNING id,severity,title,detail',[organization.id,signal.code,signal.severity,signal.title,signal.detail])).rows[0];await enqueueAlertNotifications(db,organization.id,alert,'opened');console.warn('operational_alert_opened',{code:signal.code,severity:signal.severity});}}
    const current=new Set(detected.map(signal=>signal.code));
-   for(const alert of active)if(!current.has(alert.code))await db.query("UPDATE operational_alerts SET status='resolved',resolved_at=now(),updated_at=now() WHERE organization_id=$1 AND id=$2",[organization.id,alert.id]);
+   for(const alert of active)if(!current.has(alert.code)){await db.query("UPDATE operational_alerts SET status='resolved',resolved_at=now(),updated_at=now() WHERE organization_id=$1 AND id=$2",[organization.id,alert.id]);await enqueueAlertNotifications(db,organization.id,alert,'resolved');}
+   await enqueueOperationalEscalations(db,organization.id);
    const healthy=detected.length===0;
    await db.query(`INSERT INTO operational_monitor_status(organization_id,status,open_alerts,last_checked_at,last_healthy_at,check_duration_ms) VALUES ($1,$2,$3,now(),CASE WHEN $2='healthy' THEN now() END,$4)
     ON CONFLICT(organization_id) DO UPDATE SET status=excluded.status,open_alerts=excluded.open_alerts,last_checked_at=excluded.last_checked_at,last_healthy_at=CASE WHEN excluded.status='healthy' THEN excluded.last_checked_at ELSE operational_monitor_status.last_healthy_at END,check_duration_ms=excluded.check_duration_ms,updated_at=now()`,[organization.id,healthy?'healthy':'degraded',detected.length,Math.max(0,Date.now()-started)]);
@@ -61,16 +64,18 @@ export async function runOperationalMonitoring(){
 
 export async function operationalSummary(actor:Actor){
  requirePermission(actor,'operations.read');
- const [monitor,alerts,queues,whatsapp,ai]=await Promise.all([
+ const [monitor,alerts,queues,whatsapp,ai,notificationSettings,deliveries]=await Promise.all([
   database().query('SELECT status,open_alerts,last_checked_at,last_healthy_at,check_duration_ms FROM operational_monitor_status WHERE organization_id=$1',[actor.organizationId]),
   database().query<OperationalAlert>("SELECT id,code,severity,status,title,detail,occurrence_count,first_detected_at,last_detected_at,acknowledged_at,resolved_at FROM operational_alerts WHERE organization_id=$1 ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END,CASE severity WHEN 'critical' THEN 0 ELSE 1 END,last_detected_at DESC LIMIT 50",[actor.organizationId]),
   snapshot(actor.organizationId),
   database().query<{status:string}>("SELECT status FROM whatsapp_integrations WHERE organization_id=$1",[actor.organizationId]),
   database().query<{enabled:boolean;provider:string}>("SELECT enabled,provider FROM ai_assistant_settings WHERE organization_id=$1",[actor.organizationId]),
+  operationalNotificationSettings(actor),
+  recentOperationalDeliveries(actor),
  ]);
  const storageProvider=process.env.DOCUMENT_STORAGE_PROVIDER?.trim().toLowerCase();
  const storageConfigured=storageProvider==='supabase'?Boolean(process.env.SUPABASE_URL&&process.env.SUPABASE_STORAGE_BUCKET&&(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY)):storageProvider==='local'&&process.env.NODE_ENV!=='production';
- return {monitor:monitor.rows[0]??null,alerts:alerts.rows,queues:queues,integrations:{database:true,storage:storageConfigured,whatsapp:Boolean(process.env.WHATSAPP_ACCESS_TOKEN&&process.env.WHATSAPP_VERIFY_TOKEN&&process.env.WHATSAPP_APP_SECRET&&whatsapp.rows[0]?.status==='connected'),smtp:Boolean(process.env.SMTP_HOST),ai:Boolean((process.env.GEMINI_API_KEY||process.env.OPENAI_API_KEY)&&ai.rows[0]?.enabled),ai_provider:ai.rows[0]?.provider??null}};
+ return {monitor:monitor.rows[0]??null,alerts:alerts.rows,queues:queues,notification_settings:notificationSettings,deliveries,integrations:{database:true,storage:storageConfigured,whatsapp:Boolean(process.env.WHATSAPP_ACCESS_TOKEN&&process.env.WHATSAPP_VERIFY_TOKEN&&process.env.WHATSAPP_APP_SECRET&&whatsapp.rows[0]?.status==='connected'),smtp:Boolean(process.env.SMTP_HOST),ai:Boolean((process.env.GEMINI_API_KEY||process.env.OPENAI_API_KEY)&&ai.rows[0]?.enabled),ai_provider:ai.rows[0]?.provider??null}};
 }
 
 export async function acknowledgeOperationalAlert(actor:Actor,id:unknown){
