@@ -53,7 +53,7 @@ export async function buildCommercialAiContext(actor:Actor,conversationId:string
  return {contact,conversation:{messages:messages.rows.map(row=>({direction:row.direction==='inbound'?'customer':'team',at:row.meta_timestamp,content:messageContent(row)})),messageCount:messages.rowCount??messages.rows.length},commercial,solar};
 }
 
-async function reserveUsage(actor:Actor,conversationId:string,requestId:string,action:string,setting:Setting){
+async function reserveUsage(actor:Actor,conversationId:string|null,requestId:string,action:string,setting:Setting){
  return transaction(async db=>{await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${actor.organizationId}:${actor.userId}:ai`]);
   const count=Number((await db.query<{total:number}>("SELECT count(*)::int total FROM ai_usage_events WHERE organization_id=$1 AND user_id=$2 AND created_at>now()-interval '1 hour'",[actor.organizationId,actor.userId])).rows[0].total);
   if(count>=setting.max_requests_per_hour)throw new AccessError(429,'Limite temporário do assistente atingido. Tente novamente mais tarde.');
@@ -61,11 +61,18 @@ async function reserveUsage(actor:Actor,conversationId:string,requestId:string,a
  });
 }
 function assertGrounded(output:Awaited<ReturnType<CommercialAiProvider['generate']>>['output'],context:CommercialAiContext){const text=Object.values(output).flat().join(' ');if(!context.commercial.proposal&&(/R\$\s*\d/i.test(text)||/(?:valor|custa|preço)\D{0,20}\d/i.test(text)))throw new AiProviderError('ungrounded_output');if(!context.solar?.sizing&&/\d+(?:[,.]\d+)?\s*(?:kwh|kwp|placas?|módulos?)/i.test(text))throw new AiProviderError('ungrounded_output');if(/(?:garantia|prazo)\s+(?:de\s+)?\d/i.test(text)||/economia\D{0,20}(?:R\$|\d+\s*%)/i.test(text))throw new AiProviderError('ungrounded_output');}
+function assertRewriteGrounded(suggestion:string,draft:string){
+ if(!suggestion.trim())throw new AiProviderError('invalid_schema');
+ const numbers=new Set(draft.match(/\d[\d.,]*/g)??[]);
+ if((suggestion.match(/\d[\d.,]*/g)??[]).some(value=>!numbers.has(value)))throw new AiProviderError('ungrounded_output');
+ for(const term of ['desconto','garantia','economia','parcelamento','gratuito'])if(suggestion.toLocaleLowerCase('pt-BR').includes(term)&&!draft.toLocaleLowerCase('pt-BR').includes(term))throw new AiProviderError('ungrounded_output');
+}
+const emptyContext:CommercialAiContext={contact:{name:'',kind:'unidentified',source:'',tags:[],responsible:''},conversation:{messages:[],messageCount:0},commercial:{stage:'',opportunity:'',proposal:null,openTasks:[]},solar:null};
 export async function runCommercialAi(actor:Actor,input:unknown,provider?:CommercialAiProvider){
  requirePermission(actor,'ai_assistant.use');const data=commercialAiRequest.parse(input);const setting=(await database().query<Setting>('SELECT enabled,provider,model,context_message_limit,max_requests_per_hour,version,updated_at FROM ai_assistant_settings WHERE organization_id=$1',[actor.organizationId])).rows[0];
  if(!setting?.enabled)throw new AccessError(503,'Assistente de IA ainda não configurado.');
- await assertWhatsAppConversation(actor,data.conversation_id);const eventId=await reserveUsage(actor,data.conversation_id,data.request_id,data.action,setting),started=Date.now();
- try{const context=await buildCommercialAiContext(actor,data.conversation_id,setting.context_message_limit),result=await (provider??configuredAiProvider(setting.provider,setting.model)).generate({action:data.action,context,signal:AbortSignal.timeout(commercialAiProviderTimeoutMs)});assertGrounded(result.output,context);
+ if(data.conversation_id)await assertWhatsAppConversation(actor,data.conversation_id);const eventId=await reserveUsage(actor,data.conversation_id??null,data.request_id,data.action,setting),started=Date.now();
+ try{const context=data.conversation_id?await buildCommercialAiContext(actor,data.conversation_id,setting.context_message_limit):emptyContext,result=await (provider??configuredAiProvider(setting.provider,setting.model)).generate({action:data.action,context,signal:AbortSignal.timeout(commercialAiProviderTimeoutMs),...(data.action==='rewrite_message'?{draft:data.draft,previousSuggestion:data.previous_suggestion}: {})});if(data.action==='rewrite_message')assertRewriteGrounded(result.output.suggestedReply,data.draft);else assertGrounded(result.output,context);
   await database().query("UPDATE ai_usage_events SET status='succeeded',duration_ms=$3,input_tokens=$4,output_tokens=$5,provider=$6,model=$7,finished_at=now() WHERE organization_id=$1 AND id=$2",[actor.organizationId,eventId,Date.now()-started,result.inputTokens??null,result.outputTokens??null,result.provider,result.model]);return result.output;
  }catch(error){const code=error instanceof AiProviderError?error.code:error instanceof DOMException&&error.name==='TimeoutError'?'timeout':'provider_failure';await database().query("UPDATE ai_usage_events SET status='failed',duration_ms=$3,error_code=$4,finished_at=now() WHERE organization_id=$1 AND id=$2",[actor.organizationId,eventId,Date.now()-started,code]);if(error instanceof AccessError)throw error;if(code==='free_tier_exhausted')throw new AccessError(429,'Limite gratuito do Gemini atingido. Aguarde a renovação da cota ou tente novamente mais tarde.');if(code==='rate_limited')throw new AccessError(429,'O assistente está temporariamente ocupado. Tente novamente.');if(code==='provider_model_not_found')throw new AccessError(503,'O modelo de IA configurado não está disponível. Verifique a configuração do Assistente Comercial.');if(code==='provider_bad_request')throw new AccessError(503,'Não foi possível processar a solicitação com o provedor de IA.');throw new AccessError(503,'Não foi possível gerar a sugestão agora. Tente novamente.');}
 }

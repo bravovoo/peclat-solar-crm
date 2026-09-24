@@ -1,12 +1,11 @@
 import {z} from 'zod';
 
-export const commercialAiActions=['summarize','suggest_reply','next_action','missing_information','follow_up','closing_support'] as const;
+export const commercialAiActions=['summarize','suggest_reply','next_action','missing_information','follow_up','closing_support','rewrite_message'] as const;
 export type CommercialAiAction=(typeof commercialAiActions)[number];
-export const commercialAiRequest=z.object({
- conversation_id:z.uuid(),
- action:z.enum(commercialAiActions),
- request_id:z.uuid(),
-}).strict();
+export const commercialAiRequest=z.discriminatedUnion('action',[
+ z.object({conversation_id:z.uuid(),action:z.enum(['summarize','suggest_reply','next_action','missing_information','follow_up','closing_support']),request_id:z.uuid()}).strict(),
+ z.object({conversation_id:z.uuid().optional(),action:z.literal('rewrite_message'),request_id:z.uuid(),draft:z.string().trim().min(1).max(4096),previous_suggestion:z.string().trim().min(1).max(4000).optional()}).strict(),
+]);
 export const aiSettingsInput=z.object({
  enabled:z.boolean(),provider:z.enum(['gemini','openai']),
  model:z.string().trim().min(1).max(100),context_message_limit:z.number().int().min(10).max(50),

@@ -131,7 +131,10 @@ export async function recordAction(actor:Actor,id:string,action:'archive'|'resto
    return getRecord(actor,customerId,db);
   }
   if(record.status==='converted')throw new AccessError(409,'O lead convertido deve ser preservado como origem do cliente.');
-  if(action==='delete')await db.query('UPDATE crm_records SET deleted_at=now(),version=version+1 WHERE organization_id=$1 AND id=$2',[actor.organizationId,id]);
+  if(action==='delete'){
+   await db.query("UPDATE whatsapp_conversations SET record_id=NULL,link_status='unidentified',link_source='none',version=version+1,updated_at=now() WHERE organization_id=$1 AND record_id=$2",[actor.organizationId,id]);
+   await db.query('UPDATE crm_records SET deleted_at=now(),version=version+1 WHERE organization_id=$1 AND id=$2',[actor.organizationId,id]);
+  }
   else await db.query('UPDATE crm_records SET status=$3,version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2',[actor.organizationId,id,action==='archive'?'archived':'active']);
   await activity(db,actor,id,`record.${action}`,action==='delete'?'Cadastro excluído da operação; histórico preservado.':'Status do cadastro atualizado.');
   return {id};

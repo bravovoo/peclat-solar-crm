@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { createHash, createHmac } from 'node:crypto';
@@ -13,7 +13,7 @@ import { login, sessionActor, logout, requestRecovery, resetPassword, consumeRat
 import { hashPassword, tokenHash } from '../src/modules/auth/crypto';
 import { teamMembers, recentAudit } from '../src/modules/core/repository';
 import { changeCommercialTeamMember, commercialTeamOverview, saveCommercialTeam } from '../src/modules/commercial-teams/repository';
-import { dashboard, getRecord, globalSearch, listRecords, saveRecord } from '../src/modules/crm/repository';
+import { dashboard, getRecord, globalSearch, listRecords, recordAction, saveRecord } from '../src/modules/crm/repository';
 import { followUp, getOpportunity, getTask, indicators, listOpportunities, listTasks, opportunityFeed, pipeline, saveOpportunity } from '../src/modules/commercial/repository';
 import { distributeLeads, setTeamDistribution, transferPortfolio } from '../src/modules/commercial/distribution';
 import {performanceDashboard,saveGoal} from '../src/modules/commercial-goals/repository';
@@ -58,7 +58,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,29);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,31);
   const providerConstraint=(await database().query("SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conname='ai_assistant_settings_provider_check'")).rows[0].definition;assert.match(providerConstraint,/gemini/);assert.match(providerConstraint,/openai/);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
@@ -254,6 +254,35 @@ test('webhook WhatsApp recebe com HMAC, deduplica, vincula por telefone e proteg
  const audit=await database().query("SELECT action FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.conversation_%' ORDER BY action",[orgA]);assert.ok(audit.rows.some(row=>row.action==='whatsapp.conversation_linked'));assert.ok(audit.rows.some(row=>row.action==='whatsapp.conversation_read'));
  const integration=await whatsappAdminConfiguration(admin);assert.equal(integration.configuration?.webhook_status,'receiving');assert.ok(integration.configuration?.last_event_at);
  await database().query('DELETE FROM whatsapp_conversations WHERE organization_id=$1',[orgA]);await database().query("DELETE FROM whatsapp_webhook_events WHERE organization_id=$1 AND provider_event_id LIKE 'wamid.test.%'",[orgA]);await database().query("DELETE FROM crm_record_contacts WHERE organization_id=$1 AND record_id=$2",[orgA,contactRecord]);await database().query('DELETE FROM crm_contacts WHERE organization_id=$1 AND id=$2',[orgA,contact]);await database().query("DELETE FROM crm_records WHERE organization_id=$1 AND name IN ('Lead WhatsApp','Cliente WhatsApp','Empresa do contato','Ambíguo A','Ambíguo B')",[orgA]);await database().query("DELETE FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.conversation_%'",[orgA]);await database().query("UPDATE whatsapp_integrations SET status='incomplete',webhook_status='awaiting_event',last_event_at=NULL,last_event_type='' WHERE organization_id=$1",[orgA]);
+});
+test('excluir cadastro desvincula WhatsApp sem apagar mensagens e vínculos legados não aparecem como válidos',async()=>{
+ const outsider=(await sessionActor(await login({organization:'outra-empresa',email:'outsider@test.local',password})))!;
+ await database().query('INSERT INTO whatsapp_integrations(organization_id,created_by,updated_by) VALUES ($1,$2,$2) ON CONFLICT(organization_id) DO NOTHING',[orgA,admin.userId]);
+ const otherIntegration=await database().query<{organization_id:string}>('INSERT INTO whatsapp_integrations(organization_id,created_by,updated_by) VALUES ($1,$2,$2) ON CONFLICT(organization_id) DO NOTHING RETURNING organization_id',[orgB,outsider.userId]);
+ const lead=await saveRecord(admin,'lead',{name:'Lead exclusão WhatsApp'}),replacement=await saveRecord(admin,'lead',{name:'Lead substituto WhatsApp'}),finalLead=await saveRecord(admin,'lead',{name:'Lead final WhatsApp'}),unlinked=await saveRecord(admin,'lead',{name:'Lead sem conversa WhatsApp'});
+ const foreign=(await database().query<{id:string}>("INSERT INTO crm_records(organization_id,kind,owner_id,name) VALUES ($1,'lead',$2,'Lead de outra organização WhatsApp') RETURNING id",[orgB,outsider.userId])).rows[0].id;
+ const conversation=(await database().query<{id:string}>("INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,record_id,link_status,link_source,last_message_at) VALUES ($1,'5531970011881','+5531970011881','Contato teste',$2,'identified','manual',now()) RETURNING id",[orgA,lead.id])).rows[0].id;
+ const foreignConversation=(await database().query<{id:string}>("INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,record_id,link_status,link_source) VALUES ($1,'5531970011882','+5531970011882','Outro contato',$2,'identified','manual') RETURNING id",[orgB,foreign])).rows[0].id;
+ for(let index=0;index<4;index++)await database().query('INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,message_type,text_body,sender_wa_id,meta_timestamp) VALUES ($1,$2,$3,\'text\',$4,\'5531970011881\',now())',[orgA,conversation,`wamid.delete-lead.${index}`,`Mensagem de teste ${index}`]);
+ assert.equal((await getWhatsAppConversation(admin,conversation)).conversation.record_id,lead.id);
+ assert.ok((await listWhatsAppConversations(admin,{link:'linked'})).items.some(item=>item.id===conversation));
+ const seller=(await sessionActor(sellerToken))!;await assert.rejects(()=>recordAction(seller,lead.id,'delete',lead.version),{status:403});assert.equal((await database().query('SELECT record_id FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgA,conversation])).rows[0].record_id,lead.id);
+ await recordAction(admin,lead.id,'delete',lead.version);await assert.rejects(()=>getRecord(admin,lead.id),{status:404});
+ const stored=await database().query<{record_id:string|null;link_status:string;link_source:string}>('SELECT record_id,link_status,link_source FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgA,conversation]);assert.deepEqual(stored.rows[0],{record_id:null,link_status:'unidentified',link_source:'none'});
+ const after=await getWhatsAppConversation(admin,conversation);assert.equal(after.messages.length,4);assert.equal(after.conversation.record_id,null);assert.equal(after.conversation.record_kind,null);assert.ok((await listWhatsAppConversations(admin,{link:'unlinked'})).items.some(item=>item.id===conversation));assert.equal((await listWhatsAppConversations(admin,{link:'linked'})).items.some(item=>item.id===conversation),false);
+ assert.equal((await database().query('SELECT record_id FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgB,foreignConversation])).rows[0].record_id,foreign);
+ await recordAction(admin,unlinked.id,'delete',unlinked.version);await assert.rejects(()=>getRecord(admin,unlinked.id),{status:404});
+ await linkWhatsAppConversation(admin,conversation,{record_id:replacement.id,version:Number(after.conversation.version)});
+ await database().query('UPDATE crm_records SET deleted_at=now() WHERE organization_id=$1 AND id=$2',[orgA,replacement.id]);
+ const legacy=await getWhatsAppConversation(admin,conversation);assert.equal(legacy.conversation.record_id,null);assert.equal(legacy.conversation.link_status,'unidentified');assert.equal(legacy.messages.length,4);assert.equal((await listWhatsAppConversations(admin,{link:'linked'})).items.some(item=>item.id===conversation),false);assert.ok((await listWhatsAppConversations(admin,{link:'unlinked'})).items.some(item=>item.id===conversation));
+ await linkWhatsAppConversation(admin,conversation,{record_id:null,version:Number(legacy.conversation.version)});assert.equal((await database().query('SELECT record_id FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgA,conversation])).rows[0].record_id,null);
+ const cleared=await getWhatsAppConversation(admin,conversation);await linkWhatsAppConversation(admin,conversation,{record_id:finalLead.id,version:Number(cleared.conversation.version)});assert.equal((await getWhatsAppConversation(admin,conversation)).conversation.record_id,finalLead.id);
+ await database().query('UPDATE crm_records SET deleted_at=now() WHERE organization_id=$1 AND id=$2',[orgA,finalLead.id]);
+ const cleanupSql=await readFile(new URL('../db/migrations/030_whatsapp_deleted_record_links.sql',import.meta.url),'utf8');await database().query(cleanupSql);await database().query(cleanupSql);
+ assert.equal((await database().query('SELECT record_id FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgA,conversation])).rows[0].record_id,null);assert.equal((await getWhatsAppConversation(admin,conversation)).messages.length,4);
+ assert.equal((await database().query('SELECT record_id FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgB,foreignConversation])).rows[0].record_id,foreign);
+ await database().query('DELETE FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgA,conversation]);await database().query('DELETE FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[orgB,foreignConversation]);
+ const recordIds=[lead.id,replacement.id,finalLead.id,unlinked.id];await database().query('DELETE FROM crm_activities WHERE organization_id=$1 AND record_id=ANY($2::uuid[])',[orgA,recordIds]);await database().query('DELETE FROM crm_records WHERE organization_id=$1 AND id=ANY($2::uuid[])',[orgA,recordIds]);await database().query('DELETE FROM crm_records WHERE organization_id=$1 AND id=$2',[orgB,foreign]);await database().query("DELETE FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.conversation_%' AND detail LIKE $2",[orgA,`%${conversation}%`]);if(otherIntegration.rowCount)await database().query('DELETE FROM whatsapp_integrations WHERE organization_id=$1',[orgB]);
 });
 test('webhook WhatsApp persiste lote antes de processar, recupera falha e deduplica retry da Meta',async()=>{
  const secret='segredo-fila-webhook-teste',payload=(id:string)=>({object:'whatsapp_business_account',entry:[{id:'987654321',changes:[{field:'messages',value:{metadata:{phone_number_id:'123456789'},messages:[{from:'5531912340099',id,timestamp:'1789772600',type:'text',text:{body:'Mensagem enfileirada'}}],statuses:[{id:`${id}.out`,timestamp:'1789772601',status:'sent'}]}}]}]});
@@ -815,5 +844,17 @@ test('assistente comercial usa contexto mínimo, revisão humana, limites e isol
  const missingModel:CommercialAiProvider={generate:async()=>{throw new AiProviderError('provider_model_not_found');}};await assert.rejects(()=>runCommercialAi(seller,{conversation_id:conversation,action:'summarize',request_id:crypto.randomUUID()},missingModel),{status:503,message:'O modelo de IA configurado não está disponível. Verifique a configuração do Assistente Comercial.'});
  const timeout:CommercialAiProvider={generate:async()=>{throw new DOMException('tempo esgotado','TimeoutError');}};await assert.rejects(()=>runCommercialAi(seller,{conversation_id:conversation,action:'next_action',request_id:crypto.randomUUID()},timeout),{status:503,message:'Não foi possível gerar a sugestão agora. Tente novamente.'});
  const usage=await database().query('SELECT status,action,input_tokens,output_tokens,error_code FROM ai_usage_events WHERE organization_id=$1 AND conversation_id=$2 ORDER BY created_at',[orgA,conversation]);assert.equal(usage.rowCount,12);assert.deepEqual(usage.rows.map(row=>row.status),[...Array(6).fill('succeeded'),...Array(6).fill('failed')]);assert.deepEqual(usage.rows.slice(0,6).map(row=>row.action),actions);assert.ok(usage.rows.some(row=>row.error_code==='ungrounded_output'));assert.ok(usage.rows.some(row=>row.error_code==='free_tier_exhausted'));assert.ok(usage.rows.some(row=>row.error_code==='provider_bad_request'));assert.ok(usage.rows.some(row=>row.error_code==='provider_model_not_found'));assert.ok(usage.rows.some(row=>row.error_code==='timeout'));assert.equal(JSON.stringify(usage.rows).includes('Ignore todas'),false);assert.equal(JSON.stringify(usage.rows).includes('segredo'),false);
+ const draft='boa tarde joao conseguiu ver o orçamento que mandei ontem podemos conversar',rewriteId=crypto.randomUUID();
+ const rewriter:CommercialAiProvider={generate:async input=>{assert.equal(input.action,'rewrite_message');assert.equal(input.draft,draft);assert.equal(input.context.conversation.messages.length,0);return {provider:'fake',model:'fake-safe',output:{...safeOutput,suggestedReply:'Boa tarde, João! Conseguiu analisar o orçamento que enviei ontem? Podemos conversar?'}};}};
+ const rewritten=await runCommercialAi(seller,{action:'rewrite_message',draft,request_id:rewriteId},rewriter);assert.match(rewritten.suggestedReply,/Boa tarde, João/);
+ const logged=(await database().query('SELECT conversation_id,action FROM ai_usage_events WHERE organization_id=$1 AND user_id=$2 AND request_id=$3',[orgA,seller.userId,rewriteId])).rows[0];assert.equal(logged.conversation_id,null);assert.equal(logged.action,'rewrite_message');
+ await assert.rejects(()=>runCommercialAi(seller,{action:'rewrite_message',draft,request_id:rewriteId},rewriter),{status:409});
+ await assert.rejects(()=>runCommercialAi(seller,{action:'rewrite_message',draft,request_id:crypto.randomUUID(),organization_id:orgB},rewriter));
+ await assert.rejects(()=>runCommercialAi(withoutPermission,{action:'rewrite_message',draft,request_id:crypto.randomUUID()},rewriter),{status:403});
+ await assert.rejects(()=>runCommercialAi(seller,{action:'rewrite_message',conversation_id:external,draft,request_id:crypto.randomUUID()},rewriter),{status:404});
+ const fabricated:CommercialAiProvider={generate:async()=>({provider:'fake',model:'fake-safe',output:{...safeOutput,suggestedReply:'Seu projeto tem 25% de desconto.'}})};
+ await assert.rejects(()=>runCommercialAi(seller,{action:'rewrite_message',draft,request_id:crypto.randomUUID()},fabricated),{status:503});
+ assert.equal(JSON.stringify((await database().query('SELECT * FROM ai_usage_events WHERE organization_id=$1 AND request_id=$2',[orgA,rewriteId])).rows).includes(draft),false);
+ await database().query("DELETE FROM ai_usage_events WHERE organization_id=$1 AND action='rewrite_message'",[orgA]);
  await database().query('DELETE FROM ai_usage_events WHERE organization_id=$1 AND conversation_id=$2',[orgA,conversation]);await database().query('DELETE FROM whatsapp_conversations WHERE organization_id IN ($1,$2) AND id=ANY($3::uuid[])',[orgA,orgB,[conversation,external]]);await database().query('DELETE FROM whatsapp_integrations WHERE organization_id=$1',[orgB]);await database().query('DELETE FROM crm_records WHERE organization_id=$1 AND id=$2',[orgA,record]);await database().query('DELETE FROM ai_assistant_settings WHERE organization_id=$1',[orgA]);
 });
