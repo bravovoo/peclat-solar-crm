@@ -21,3 +21,13 @@ A migration `027_operational_notifications.sql` cria a configuração e a fila p
 O conteúdo enviado inclui somente título, severidade e contagens seguras já presentes no incidente. Endereços não são registrados nos logs da Cloudflare, e credenciais SMTP continuam exclusivas do runtime. WhatsApp não é usado como canal de alerta, evitando depender da própria integração que pode estar indisponível.
 
 As novas tabelas mantêm RLS ativa, sem `FORCE ROW LEVEL SECURITY`, sem policies públicas e sem privilégios diretos para a Data API. Os testes usam um provedor SMTP simulado e não enviam e-mails reais.
+
+## 9.3 Recuperação Automática de Leads
+
+A recuperação de leads reutiliza integralmente a integração oficial existente com o WhatsApp, o catálogo de modelos aprovados, o webhook, o histórico de conversas e o Cron Trigger do Worker. A funcionalidade permanece desativada por padrão e só pode ser ativada por administrador quando a integração estiver conectada e o envio externo global estiver habilitado.
+
+A migration `028_lead_recovery.sql` cria configuração e sequência por organização, consentimento explícito por lead, acompanhamentos, tentativas persistentes e notificações internas. Leads que aguardam resposta são diferenciados de leads nunca contatados. Mensagens automáticas não reiniciam o prazo: o marco usa somente a última saída manual, ou a criação/atividade comercial para os nunca contatados. Negociação concluída, proposta aceita, tarefa futura, opt-out, contato bloqueado, responsável inativo e etapa fora da configuração impedem o agendamento.
+
+Cada tentativa usa exclusivamente um modelo aprovado e suportado da própria organização. A fila usa bloqueio concorrente, identificador idempotente e revalida consentimento, elegibilidade, horário, conversa e configuração imediatamente antes do envio. Resultado incerto não é repetido automaticamente. Uma resposta inbound encerra a sequência na mesma transação do webhook, cancela tentativas futuras e notifica o vendedor; entrega e leitura não contam como resposta.
+
+O painel **Recuperação de Leads** oferece indicadores, filtros, simulação sem ação externa, horários, vendedores, etapas e sequência configuráveis. No cadastro do lead é possível registrar consentimento, consultar a próxima tentativa, pausar, cancelar, reagendar e retomar. Todas as tabelas novas usam RLS, sem `FORCE ROW LEVEL SECURITY`, sem policies públicas e sem privilégios diretos para `PUBLIC`, `anon`, `authenticated` ou `service_role`.

@@ -4,6 +4,7 @@ import {database,transaction} from '@/server/db';
 import {AccessError} from '@/modules/auth/policy';
 import {normalizeWhatsAppNumber} from './domain';
 import {emitAutomationEvent} from '@/modules/automations/events';
+import {handleLeadRecoveryInbound} from '@/modules/lead-recovery/engine';
 
 type Db=Pick<PoolClient,'query'>;
 type Json=Record<string,unknown>;
@@ -55,6 +56,7 @@ export async function receiveMetaWebhook(raw:Uint8Array,signature:string|null,se
    if(!inserted.rowCount){duplicates++;continue;}
    if(message.direction==='inbound'){
     await db.query(`UPDATE whatsapp_conversations SET unread_count=unread_count+1,last_message_preview=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $4 ELSE last_message_preview END,last_message_type=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $5 ELSE last_message_type END,last_message_at=GREATEST(COALESCE(last_message_at,$3),$3),last_inbound_at=GREATEST(COALESCE(last_inbound_at,$3),$3),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[organizationId,conversationId,message.timestamp,message.preview,message.type]);
+    await handleLeadRecoveryInbound(db,{organizationId,conversationId,recordId:conversation.rows[0].record_id,timestamp:message.timestamp,text:message.type==='text'?message.body:''});
     await emitAutomationEvent(db,{organizationId,type:'whatsapp.inbound_received',eventId:message.id,entityType:'conversation',entityId:conversationId,conversationId,recordId:conversation.rows[0].record_id,payload:{message_id:inserted.rows[0].id,direction:'inbound',message_type:message.type}});
     if(conversation.rows[0].created)await emitAutomationEvent(db,{organizationId,type:'whatsapp.conversation_created',eventId:`conversation:${conversationId}`,entityType:'conversation',entityId:conversationId,conversationId,recordId:conversation.rows[0].record_id});
     if(!conversation.rows[0].automation_owner_id)await emitAutomationEvent(db,{organizationId,type:'whatsapp.conversation_unassigned',eventId:`unassigned:${conversationId}:${message.id}`,entityType:'conversation',entityId:conversationId,conversationId,recordId:conversation.rows[0].record_id});
