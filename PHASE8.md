@@ -119,3 +119,11 @@ A migration `023_gemini_ai_provider.sql` foi necessária porque a constraint da 
 ### Validação local da Fase 8.6.1
 
 Passaram 110/110 testes unitários e integrados com providers simulados e 31 cenários Playwright, incluindo seleção e persistência do Gemini, troca para OpenAI, ausência de campo de credencial e responsividade em 390×844 e 1440×900. Nenhum teste chamou Google, OpenAI ou WhatsApp reais. TypeScript, lint, build Next.js, bundle OpenNext, Wrangler dry-run e `git diff --check` passaram.
+
+## Gerenciador de modelos oficiais
+
+O gerenciador reutiliza a configuração por organização, o WABA ID, a Graph API e o token protegido já usados pela integração oficial. Administradores com `whatsapp.templates.manage` podem criar e editar rascunhos locais de texto, informar categoria, idioma, variáveis posicionais e exemplos, revisar a prévia e confirmar explicitamente cada submissão. O navegador nunca recebe WABA ID ou token. A submissão usa `POST /{WABA-ID}/message_templates`; respostas incertas bloqueiam nova tentativa até uma sincronização, evitando duplicação.
+
+A migration `029_whatsapp_template_manager.sql` cria `whatsapp_template_drafts`, com RLS, revogação da Data API, escopo por organização, concorrência otimista, autoria, estados oficiais e auditoria. Ela também prepara, somente como rascunhos locais, os três modelos `peclat_recuperacao_lead_1`, `peclat_recuperacao_lead_2` e `peclat_recuperacao_lead_3`, todos `MARKETING`, `pt_BR` e com o exemplo `Maria`. Nenhum deles é submetido automaticamente.
+
+A sincronização existente continua sendo a fonte dos estados oficiais. Somente modelos `APPROVED` e compatíveis entram na Inbox, nas automações e na Recuperação de Leads; `PENDING`, `REJECTED`, `PAUSED` e `DISABLED` permanecem indisponíveis para envio. A interface fica em **Configurações → WhatsApp Business → Modelos de Mensagens**, preserva os temas claro e escuro e oferece layout responsivo.

@@ -3,9 +3,13 @@ import {AccessError} from '@/modules/auth/policy';
 type Json=Record<string,unknown>;
 export type MetaFetcher=(input:string,init?:RequestInit)=>Promise<Response>;
 export type MetaConfiguration={apiVersion:string;phoneNumberId:string;businessAccountId:string;accessToken:string};
-export type MetaTemplate={id:string;name:string;language:string;category:string;status:string;components:unknown[]};
+export type MetaTemplate={id:string;name:string;language:string;category:string;status:string;components:unknown[];rejectedReason:string};
+export type MetaTemplateCreateInput={name:string;language:string;category:'MARKETING'|'UTILITY';components:unknown[]};
 export class MetaSendError extends Error{
  constructor(public readonly kind:'rejected'|'uncertain',public readonly safeCode:string,public readonly safeTitle:string,public readonly safeDetail:string){super(safeDetail);this.name='MetaSendError';}
+}
+export class MetaTemplateError extends Error{
+ constructor(public readonly kind:'rejected'|'uncertain',public readonly safeCode:string,public readonly safeDetail:string){super(safeDetail);this.name='MetaTemplateError';}
 }
 const object=(value:unknown):Json=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Json:{};
 const safe=(value:unknown,max:number)=>typeof value==='string'?value.replace(/[\r\n\t]+/g,' ').trim().slice(0,max):'';
@@ -20,7 +24,13 @@ export async function sendMetaMessage(config:MetaConfiguration,payload:Json,fetc
  const messages=Array.isArray(data.messages)?data.messages:[],wamid=safe(object(messages[0]).id,240);if(!wamid)throw new MetaSendError('uncertain','invalid_response','Resultado não confirmado','A Meta respondeu sem um identificador de mensagem. Não reenvie automaticamente.');return {wamid};
 }
 export async function fetchMetaTemplates(config:MetaConfiguration,fetcher:MetaFetcher=fetch){
- const url=new URL(endpoint(config,`${encodeURIComponent(config.businessAccountId)}/message_templates`));url.searchParams.set('fields','id,name,language,category,status,components');url.searchParams.set('limit','250');const rows:unknown[]=[];for(let page=0;page<10;page++){const response=await fetcher(url.toString(),{headers:headers(config),cache:'no-store'}),payload=await body(response);if(!response.ok){const mapped=mappedError(response.status,payload);throw new AccessError(502,mapped.title+'.');}rows.push(...(Array.isArray(payload.data)?payload.data:[]));const after=safe(object(object(payload.paging).cursors).after,500);if(!after)break;url.searchParams.set('after',after);}return rows.map(raw=>{const item=object(raw);return {id:safe(item.id,180),name:safe(item.name,512),language:safe(item.language,35),category:safe(item.category,50),status:safe(item.status,30)||'UNKNOWN',components:Array.isArray(item.components)?item.components:[]} satisfies MetaTemplate;}).filter(item=>item.id&&item.name&&item.language);
+ const url=new URL(endpoint(config,`${encodeURIComponent(config.businessAccountId)}/message_templates`));url.searchParams.set('fields','id,name,language,category,status,components,rejected_reason');url.searchParams.set('limit','250');const rows:unknown[]=[];for(let page=0;page<10;page++){const response=await fetcher(url.toString(),{headers:headers(config),cache:'no-store'}),payload=await body(response);if(!response.ok){const mapped=mappedError(response.status,payload);throw new AccessError(502,mapped.title+'.');}rows.push(...(Array.isArray(payload.data)?payload.data:[]));const after=safe(object(object(payload.paging).cursors).after,500);if(!after)break;url.searchParams.set('after',after);}return rows.map(raw=>{const item=object(raw);return {id:safe(item.id,180),name:safe(item.name,512),language:safe(item.language,35),category:safe(item.category,50),status:safe(item.status,30)||'UNKNOWN',components:Array.isArray(item.components)?item.components:[],rejectedReason:safe(item.rejected_reason,500)} satisfies MetaTemplate;}).filter(item=>item.id&&item.name&&item.language);
+}
+export async function createMetaTemplate(config:MetaConfiguration,input:MetaTemplateCreateInput,fetcher:MetaFetcher=fetch){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);let response:Response;
+ try{response=await fetcher(endpoint(config,`${encodeURIComponent(config.businessAccountId)}/message_templates`),{method:'POST',headers:headers(config),body:JSON.stringify({name:input.name,language:input.language,category:input.category,parameter_format:'POSITIONAL',components:input.components}),signal:controller.signal,cache:'no-store'});}catch{throw new MetaTemplateError('uncertain','network_unknown','A conexão foi interrompida e a submissão não pôde ser confirmada. Sincronize os modelos antes de tentar novamente.');}finally{clearTimeout(timer);}
+ const payload=await body(response);if(!response.ok){const mapped=mappedError(response.status,payload);throw new MetaTemplateError(response.status>=500?'uncertain':'rejected',mapped.code,mapped.detail);}
+ const id=safe(payload.id,180),status=safe(payload.status,30)||'PENDING',category=safe(payload.category,50)||input.category;if(!id)throw new MetaTemplateError('uncertain','invalid_response','A Meta respondeu sem o identificador do modelo. Sincronize antes de tentar novamente.');return {id,status,category};
 }
 export async function uploadMetaMedia(config:MetaConfiguration,file:File,fetcher:MetaFetcher=fetch){
  const form=new FormData();form.set('messaging_product','whatsapp');form.set('type',file.type);form.set('file',file,file.name);

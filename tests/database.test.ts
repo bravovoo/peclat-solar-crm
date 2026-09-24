@@ -22,13 +22,14 @@ import {saveWhatsAppConfiguration,whatsappActionAvailability,whatsappAdminConfig
 import {enqueueMetaWebhook,processMetaWebhookBatches,receiveMetaWebhook} from '../src/modules/whatsapp/webhook';
 import {createLeadFromWhatsApp,getWhatsAppConversation,linkWhatsAppConversation,listWhatsAppConversations,markWhatsAppConversationRead,whatsappConversationsForRecord} from '../src/modules/whatsapp/inbox';
 import {listWhatsAppTemplates,sendWhatsAppMedia,sendWhatsAppTemplate,sendWhatsAppText,syncWhatsAppTemplates} from '../src/modules/whatsapp/outbound';
+import {createTemplateDraft,submitTemplateDraft,synchronizeTemplateManager,templateManagerOverview,updateTemplateDraft} from '../src/modules/whatsapp/template-manager';
 import {whatsappMediaResponse} from '../src/modules/whatsapp/media';
 import {aiAssistantSettings,commercialAiProviderTimeoutMs,runCommercialAi,saveAiAssistantSettings} from '../src/modules/ai/assistant';
 import {AiProviderError,type CommercialAiProvider} from '../src/modules/ai/provider';
 import {cleanupExpiredOperationalData} from '../src/modules/operations/maintenance';
 import {acknowledgeOperationalAlert,operationalSummary,runOperationalMonitoring} from '../src/modules/operations/monitoring';
 import {processOperationalAlertDeliveries,saveOperationalNotificationSettings} from '../src/modules/operations/notifications';
-import {recoveryDashboard,recoverySettings,saveRecoveryConsent,saveRecoverySettings} from '../src/modules/lead-recovery/repository';
+import {recoveryDashboard,recoveryOptions,recoverySettings,saveRecoveryConsent,saveRecoverySettings} from '../src/modules/lead-recovery/repository';
 import {handleLeadRecoveryInbound,processLeadRecoveryAttempts,refreshLeadRecoveryEnrollments} from '../src/modules/lead-recovery/engine';
 import type { Actor } from '../src/modules/auth/policy';
 let server:EmbeddedPostgres;let orgA:string;let orgB:string;let admin:Actor;let sellerToken:string;let adminToken:string;
@@ -57,7 +58,7 @@ test('migration e seed idempotentes preservam senha existente',async()=>{
   const prior=(await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash;
   await migrate();process.env.SEED_ADMIN_PASSWORD='Outra senha forte 2026';await seed();
   assert.equal((await database().query('SELECT password_hash FROM users WHERE email=$1',['admin@test.local'])).rows[0].password_hash,prior);
-  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,28);
+  assert.equal((await database().query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n,29);
   const providerConstraint=(await database().query("SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conname='ai_assistant_settings_provider_check'")).rows[0].definition;assert.match(providerConstraint,/gemini/);assert.match(providerConstraint,/openai/);
 });
 test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação',async()=>{
@@ -106,7 +107,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
 });
 test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
   const tables=await database().query("SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname");
-  assert.equal(tables.rowCount,87);
+  assert.equal(tables.rowCount,88);
   assert.deepEqual(tables.rows.filter(table=>!table.relrowsecurity),[]);
   assert.equal((await database().query("SELECT count(*)::int n FROM pg_policies WHERE schemaname='public'")).rows[0].n,0);
   assert.equal((await database().query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee IN ('anon','authenticated','service_role')")).rows[0].n,0);
@@ -206,6 +207,25 @@ test('fundação WhatsApp restringe configuração, mantém secrets fora do banc
  const oldAccess=process.env.WHATSAPP_ACCESS_TOKEN,oldVerify=process.env.WHATSAPP_VERIFY_TOKEN,oldSecret=process.env.WHATSAPP_APP_SECRET;process.env.WHATSAPP_ACCESS_TOKEN='test-only';process.env.WHATSAPP_VERIFY_TOKEN='test-only';process.env.WHATSAPP_APP_SECRET='test-only';
  try{await database().query("UPDATE whatsapp_integrations SET status='connected' WHERE organization_id=$1",[orgA]);assert.equal((await whatsappActionAvailability(seller,'(31) 99999-1234')).available,true);assert.equal((await whatsappActionAvailability(seller,'inválido')).available,false);assert.equal((await whatsappActionAvailability(outsider,'(31) 99999-1234')).available,false);}finally{if(oldAccess===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=oldAccess;if(oldVerify===undefined)delete process.env.WHATSAPP_VERIFY_TOKEN;else process.env.WHATSAPP_VERIFY_TOKEN=oldVerify;if(oldSecret===undefined)delete process.env.WHATSAPP_APP_SECRET;else process.env.WHATSAPP_APP_SECRET=oldSecret;await database().query("UPDATE whatsapp_integrations SET status='incomplete' WHERE organization_id=$1",[orgA]);}
  const audit=(await database().query("SELECT action,detail FROM audit_logs WHERE organization_id=$1 AND action LIKE 'whatsapp.%'",[orgA])).rows;assert.deepEqual(audit.map(row=>row.action),['whatsapp.configuration_created']);assert.ok(audit.every(row=>!row.detail.includes('test-only')));
+});
+test('gerenciador cria rascunhos, submete com Meta simulada, sincroniza e isola organizações',async()=>{
+ const seller=(await sessionActor(sellerToken))!,outsider=(await sessionActor(await login({organization:'outra-empresa',email:'outsider@test.local',password})))!,previous=process.env.WHATSAPP_ACCESS_TOKEN;process.env.WHATSAPP_ACCESS_TOKEN='template-test-token';
+ await database().query("UPDATE whatsapp_integrations SET status='connected' WHERE organization_id=$1",[orgA]);
+ await database().query("INSERT INTO whatsapp_integrations(organization_id,status,account_name,phone_number_id,business_account_id,display_phone_number,api_version,created_by,updated_by) VALUES ($1,'connected','Outra','111111','222222','+55 11 99999-0000','v99.0',$2,$2)",[orgB,outsider.userId]);
+ try{
+  const seeded=await templateManagerOverview(admin);assert.equal(seeded.items.filter(item=>item.name.startsWith('peclat_recuperacao_lead_')).length,3);assert.ok(seeded.items.every(item=>item.submission_status==='DRAFT'));
+  await assert.rejects(()=>templateManagerOverview(seller),{status:403});
+  const created=await createTemplateDraft(admin,{name:'modelo_integracao_teste',category:'MARKETING',language:'pt_BR',body_text:'Olá, {{1}}! Podemos conversar?',example_values:['Maria']});
+  await assert.rejects(()=>createTemplateDraft(admin,{name:'modelo_integracao_teste',category:'MARKETING',language:'pt_BR',body_text:'Outro texto',example_values:[]}),{status:409});
+  const edited=await updateTemplateDraft(admin,created.id,{name:created.name,category:'MARKETING',language:'pt_BR',body_text:'Olá, {{1}}! Podemos retomar seu projeto?',example_values:['Maria'],version:Number(created.version)});assert.equal(Number(edited.version),2);
+  let posts=0,submittedBody='';const submitFetcher=async(_input:string,init?:RequestInit)=>{if(init?.method==='POST'){posts++;submittedBody=String(init.body);return new Response(JSON.stringify({id:'meta-manager-test',status:'PENDING',category:'MARKETING'}),{status:200});}return new Response(JSON.stringify({data:[]}),{status:200});};
+  const pending=await submitTemplateDraft(admin,created.id,{version:Number(edited.version),confirmation:true},submitFetcher);assert.equal(pending.submission_status,'PENDING');assert.equal(posts,1);assert.match(submittedBody,/"body_text":\[\["Maria"\]\]/);assert.equal(submittedBody.includes('template-test-token'),false);
+  await assert.rejects(()=>submitTemplateDraft(admin,created.id,{version:Number(pending.version),confirmation:true},submitFetcher),{status:409});assert.equal(posts,1);
+  const rejected=await createTemplateDraft(admin,{name:'modelo_rejeitado_teste',category:'MARKETING',language:'pt_BR',body_text:'Olá, {{1}}!',example_values:['Maria']});await assert.rejects(()=>submitTemplateDraft(admin,rejected.id,{version:Number(rejected.version),confirmation:true},async()=>new Response(JSON.stringify({error:{code:100,message:'Texto recusado no teste'}}),{status:400})),{status:400});assert.equal((await database().query('SELECT submission_status FROM whatsapp_template_drafts WHERE id=$1',[rejected.id])).rows[0].submission_status,'REJECTED');
+  const uncertain=await createTemplateDraft(admin,{name:'modelo_incerto_teste',category:'MARKETING',language:'pt_BR',body_text:'Olá, {{1}}! Podemos conversar?',example_values:['Maria']});let uncertainPosts=0;const uncertainFetcher=async(_input:string,init?:RequestInit)=>{if(init?.method==='POST'){uncertainPosts++;throw new Error('socket simulado');}return new Response(JSON.stringify({data:[]}),{status:200});};await assert.rejects(()=>submitTemplateDraft(admin,uncertain.id,{version:Number(uncertain.version),confirmation:true},uncertainFetcher),{status:502});const uncertainState=(await templateManagerOverview(admin)).items.find(item=>item.id===uncertain.id)!;assert.equal(uncertainState.submission_status,'UNCERTAIN');await assert.rejects(()=>submitTemplateDraft(admin,uncertain.id,{version:Number(uncertainState.version),confirmation:true},uncertainFetcher),{status:409});assert.equal(uncertainPosts,1);
+  const statusFetcher=(status:string)=>async()=>new Response(JSON.stringify({data:[{id:'meta-manager-test',name:'modelo_integracao_teste',language:'pt_BR',category:'MARKETING',status,components:[{type:'BODY',text:'Olá, {{1}}! Podemos retomar seu projeto?',example:{body_text:[['Maria']]}}]}]}),{status:200});await synchronizeTemplateManager(admin,statusFetcher('PAUSED'));const paused=(await templateManagerOverview(admin)).items.find(item=>item.id===created.id)!;assert.equal(paused.submission_status,'PAUSED');assert.equal((await recoveryOptions(admin)).templates.some(item=>item.name==='modelo_integracao_teste'),false);await synchronizeTemplateManager(admin,statusFetcher('APPROVED'));const approved=(await templateManagerOverview(admin)).items.find(item=>item.id===created.id)!;assert.equal(approved.submission_status,'APPROVED');assert.ok((await recoveryOptions(admin)).templates.some(item=>item.name==='modelo_integracao_teste'));
+  const other=await createTemplateDraft(outsider,{name:'modelo_outra_empresa',category:'UTILITY',language:'pt_BR',body_text:'Olá, {{1}}! Atualização disponível.',example_values:['João']});assert.ok(other.id);assert.equal((await templateManagerOverview(admin)).items.some(item=>item.name==='modelo_outra_empresa'),false);
+ }finally{if(previous===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=previous;await database().query('DELETE FROM whatsapp_template_drafts WHERE organization_id=$1',[orgB]);await database().query('DELETE FROM whatsapp_integrations WHERE organization_id=$1',[orgB]);await database().query("UPDATE whatsapp_integrations SET status='incomplete' WHERE organization_id=$1",[orgA]);}
 });
 test('webhook WhatsApp recebe com HMAC, deduplica, vincula por telefone e protege a inbox',async()=>{
  const secret='segredo-app-somente-teste';
