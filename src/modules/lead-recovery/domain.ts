@@ -50,7 +50,5 @@ export const recoveryOperationInput=z.discriminatedUnion('action',[
  z.object({action:z.literal('reschedule'),version:z.number().int().positive(),scheduled_for:z.iso.datetime({offset:true})}).strict(),
 ]);
 
-export const notificationReadInput=z.object({notification_id:z.uuid()}).strict();
-
 export type RecoverySettingsInput=z.infer<typeof recoverySettingsInput>;
 export type RecoveryFilters=z.infer<typeof recoveryFilters>;

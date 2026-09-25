@@ -18,9 +18,14 @@ export const commercialAiOutput=z.object({
  suggestedReply:short,followUp:short,closingSupport:short,
 }).strict();
 export type CommercialAiOutput=z.infer<typeof commercialAiOutput>;
+export const knowledgeEntryInput=z.object({category:z.string().trim().min(1).max(80),question:z.string().trim().min(5).max(500),answer:z.string().trim().min(1).max(3000),keywords:z.array(z.string().trim().min(2).max(80)).max(12)}).strict();
+export const knowledgeGuidanceInput=z.object({tone:z.enum(['profissional','acolhedor','direto']),formality:z.enum(['formal','equilibrada','informal']),response_length:z.enum(['curta','media','detalhada']),emoji_policy:z.enum(['nenhum','moderado']),seller_introduction:z.string().trim().max(300),commercial_rules:z.string().trim().max(3000),version:z.number().int().positive().nullable()}).strict();
+export const knowledgeQuestionInput=z.object({question:z.string().trim().min(5).max(500)}).strict();
+export const knowledgeProposalInput=knowledgeEntryInput.extend({conversation_id:z.uuid().optional()}).strict();
 export type CommercialAiContext={
  contact:{name:string;kind:string;source:string;tags:string[];responsible:string};
  conversation:{messages:{direction:'customer'|'team';at:string;content:string}[];messageCount:number};
  commercial:{stage:string;opportunity:string;proposal:{name:string;value:string;validUntil:string;status:string}|null;openTasks:{title:string;dueDate:string;status:string}[]};
  solar:{averageConsumptionKwh:string;propertyType:string;roofType:string;sizing:{systemPowerKwp:string;moduleCount:number;estimatedMonthlyGenerationKwh:string}|null}|null;
+ knowledge?:{guidance:{tone:string;formality:string;responseLength:string;emojiPolicy:string;sellerIntroduction:string;commercialRules:string}|null;entries:{id:string;category:string;question:string;answer:string}[]};
 };

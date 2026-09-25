@@ -7,7 +7,7 @@ import {api} from '@/components/crm/api';
 type Notification={id:string;title:string;detail:string;entity_type:string;entity_id:string|null;read_at:string|null;created_at:string};
 export function NotificationCenter(){
  const [items,setItems]=useState<Notification[]>([]),[open,setOpen]=useState(false);const root=useRef<HTMLDivElement>(null);
- useEffect(()=>{let active=true;async function load(){try{const result=await api<{items:Notification[]}>('/api/notifications');if(active)setItems(result.items);}catch{}}void load();const timer=setInterval(load,30000);return()=>{active=false;clearInterval(timer);};},[]);
+ useEffect(()=>{let active=true,loading=false;async function load(){if(loading||document.visibilityState==='hidden')return;loading=true;try{const result=await api<{items:Notification[]}>('/api/notifications');if(active)setItems(result.items);}catch{}finally{loading=false;}}const visible=()=>{if(document.visibilityState==='visible')void load();};void load();const timer=setInterval(()=>void load(),30000);document.addEventListener('visibilitychange',visible);return()=>{active=false;clearInterval(timer);document.removeEventListener('visibilitychange',visible);};},[]);
  useEffect(()=>{if(!open)return;const close=(event:MouseEvent)=>{if(!root.current?.contains(event.target as Node))setOpen(false);};document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close);},[open]);
  const unread=items.filter(item=>!item.read_at).length;
  async function read(item:Notification){if(!item.read_at){await api('/api/notifications','POST',{notification_id:item.id});setItems(current=>current.map(value=>value.id===item.id?{...value,read_at:new Date().toISOString()}:value));}setOpen(false);}
