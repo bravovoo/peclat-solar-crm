@@ -5,6 +5,7 @@ import {failure,readMultipartMutation,readMutation} from '@/server/http';
 import {AccessError} from '@/modules/auth/policy';
 import {createLeadFromWhatsApp,getWhatsAppConversation,linkWhatsAppConversation,listWhatsAppConversations,markWhatsAppConversationRead,searchWhatsAppLinkOptions,WhatsAppLeadDuplicateError} from '@/modules/whatsapp/inbox';
 import {sendWhatsAppMedia,sendWhatsAppTemplate,sendWhatsAppText} from '@/modules/whatsapp/outbound';
+import {sendWhatsAppFlow} from '@/modules/whatsapp/flow-outbound';
 import {MEDIA_REQUEST_LIMIT,whatsappMediaResponse} from '@/modules/whatsapp/media';
 import {automationConversationInput} from '@/modules/automations/domain';
 import {updateConversationAutomation} from '@/modules/automations/repository';
@@ -30,6 +31,7 @@ async function handle(request:Request,context:Context){
    return respond(await sendWhatsAppMedia(actor,id,{client_request_id:form.get('client_request_id'),caption:form.get('caption')??''},file));
   }
   if(request.method==='POST'&&id&&action==='template')return respond(await sendWhatsAppTemplate(actor,id,await readMutation(request)));
+  if(request.method==='POST'&&id&&action==='flow')return respond(await sendWhatsAppFlow(actor,id,await readMutation(request)));
   if(request.method==='PUT'&&id&&action==='link')return respond(await linkWhatsAppConversation(actor,id,await readMutation(request)));
   if(request.method==='PUT'&&id&&action==='automation')return respond(await updateConversationAutomation(actor,id,automationConversationInput.parse(await readMutation(request))));
   throw new AccessError(404,'Recurso não encontrado.');

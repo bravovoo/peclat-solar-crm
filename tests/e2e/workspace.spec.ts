@@ -31,7 +31,7 @@ test('vendedor não acessa dados da equipe nem configurações',async({page,cont
 test('layout mobile sem overflow e menu funcional',async({page})=>{
   await page.setViewportSize({width:390,height:844});await page.goto('/login');
   await page.screenshot({path:'test-results/login-mobile.png',fullPage:true});
-  await page.getByLabel('E-mail profissional').fill('admin@e2e.local');await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
+  await page.getByLabel('E-mail profissional').fill('workspace-mobile@e2e.local');await page.getByLabel('Senha',{exact:true}).fill(password);await page.getByRole('button',{name:'Entrar na plataforma'}).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading',{name:'Sua operação, conectada.'})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);

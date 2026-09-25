@@ -5,11 +5,16 @@ export type MetaFetcher=(input:string,init?:RequestInit)=>Promise<Response>;
 export type MetaConfiguration={apiVersion:string;phoneNumberId:string;businessAccountId:string;accessToken:string};
 export type MetaTemplate={id:string;name:string;language:string;category:string;status:string;components:unknown[];rejectedReason:string};
 export type MetaTemplateCreateInput={name:string;language:string;category:'MARKETING'|'UTILITY';components:unknown[]};
+export type MetaFlow={id:string;name:string;categories:string[];status:string;validationErrors:unknown[];jsonVersion:string;dataApiVersion:string;previewUrl:string;healthStatus:Json};
+export type MetaFlowCreateInput={name:string;category:string;endpointUri?:string};
 export class MetaSendError extends Error{
  constructor(public readonly kind:'rejected'|'uncertain',public readonly safeCode:string,public readonly safeTitle:string,public readonly safeDetail:string){super(safeDetail);this.name='MetaSendError';}
 }
 export class MetaTemplateError extends Error{
  constructor(public readonly kind:'rejected'|'uncertain',public readonly safeCode:string,public readonly safeDetail:string){super(safeDetail);this.name='MetaTemplateError';}
+}
+export class MetaFlowError extends Error{
+ constructor(public readonly kind:'rejected'|'uncertain',public readonly safeCode:string,public readonly safeDetail:string,public readonly validationErrors:unknown[]=[]){super(safeDetail);this.name='MetaFlowError';}
 }
 const object=(value:unknown):Json=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Json:{};
 const safe=(value:unknown,max:number)=>typeof value==='string'?value.replace(/[\r\n\t]+/g,' ').trim().slice(0,max):'';
@@ -17,6 +22,7 @@ async function body(response:Response){try{return object(await response.json());
 function endpoint(config:MetaConfiguration,path:string){const testBase=process.env.WHATSAPP_META_TEST_MODE==='true'?process.env.WHATSAPP_GRAPH_API_BASE_URL:'';if(testBase){const url=new URL(testBase);if(!['127.0.0.1','localhost'].includes(url.hostname))throw new AccessError(503,'Endpoint de teste do WhatsApp inválido.');return `${url.origin}/${encodeURIComponent(config.apiVersion)}/${path}`;}return `https://graph.facebook.com/${encodeURIComponent(config.apiVersion)}/${path}`;}
 function headers(config:MetaConfiguration){return {'Authorization':`Bearer ${config.accessToken}`,'Content-Type':'application/json'};}
 function mappedError(status:number,payload:Json){const error=object(payload.error),code=safe(error.code,40)||String(status),title=status===401||status===403?'Credencial do WhatsApp recusada':status===429?'Limite temporário da Meta atingido':status>=500?'Serviço da Meta indisponível':'Envio recusado pela Meta';return {code,title,detail:safe(error.message,300)||'Não foi possível enviar a mensagem pelo WhatsApp.'};}
+async function flowResponse(response:Response){const payload=await body(response);if(!response.ok){const mapped=mappedError(response.status,payload),validation=Array.isArray(payload.validation_errors)?payload.validation_errors:[];throw new MetaFlowError(response.status>=500?'uncertain':'rejected',mapped.code,mapped.detail,validation);}return payload;}
 export async function sendMetaMessage(config:MetaConfiguration,payload:Json,fetcher:MetaFetcher=fetch){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);let response:Response;
  try{response=await fetcher(endpoint(config,`${encodeURIComponent(config.phoneNumberId)}/messages`),{method:'POST',headers:headers(config),body:JSON.stringify(payload),signal:controller.signal,cache:'no-store'});}catch{clearTimeout(timer);throw new MetaSendError('uncertain','network_unknown','Resultado não confirmado','A conexão foi interrompida e o resultado do envio não pôde ser confirmado. Não reenvie automaticamente.');}finally{clearTimeout(timer);}
@@ -32,6 +38,24 @@ export async function createMetaTemplate(config:MetaConfiguration,input:MetaTemp
  const payload=await body(response);if(!response.ok){const mapped=mappedError(response.status,payload);throw new MetaTemplateError(response.status>=500?'uncertain':'rejected',mapped.code,mapped.detail);}
  const id=safe(payload.id,180),status=safe(payload.status,30)||'PENDING',category=safe(payload.category,50)||input.category;if(!id)throw new MetaTemplateError('uncertain','invalid_response','A Meta respondeu sem o identificador do modelo. Sincronize antes de tentar novamente.');return {id,status,category};
 }
+export async function fetchMetaFlows(config:MetaConfiguration,fetcher:MetaFetcher=fetch){
+ const url=new URL(endpoint(config,`${encodeURIComponent(config.businessAccountId)}/flows`));url.searchParams.set('fields','id,name,categories,status,validation_errors,json_version,data_api_version,preview,health_status');url.searchParams.set('limit','100');const rows:unknown[]=[];
+ for(let page=0;page<10;page++){const response=await fetcher(url.toString(),{headers:headers(config),cache:'no-store'}),payload=await flowResponse(response);rows.push(...(Array.isArray(payload.data)?payload.data:[]));const after=safe(object(object(payload.paging).cursors).after,500);if(!after)break;url.searchParams.set('after',after);}
+ return rows.map(raw=>{const item=object(raw),preview=object(item.preview);return {id:safe(item.id,180),name:safe(item.name,200),categories:Array.isArray(item.categories)?item.categories.map(value=>safe(value,50)).filter(Boolean):[],status:safe(item.status,30)||'UNKNOWN',validationErrors:Array.isArray(item.validation_errors)?item.validation_errors:[],jsonVersion:safe(item.json_version,20),dataApiVersion:safe(item.data_api_version,20),previewUrl:safe(preview.preview_url,3000),healthStatus:object(item.health_status)} satisfies MetaFlow;}).filter(item=>item.id&&item.name);
+}
+export async function createMetaFlow(config:MetaConfiguration,input:MetaFlowCreateInput,fetcher:MetaFetcher=fetch){
+ const form=new FormData();form.set('name',input.name);form.set('categories',JSON.stringify([input.category]));if(input.endpointUri)form.set('endpoint_uri',input.endpointUri);
+ let response:Response;try{response=await fetcher(endpoint(config,`${encodeURIComponent(config.businessAccountId)}/flows`),{method:'POST',headers:{Authorization:`Bearer ${config.accessToken}`},body:form,cache:'no-store'});}catch{throw new MetaFlowError('uncertain','network_unknown','A criação do Flow não pôde ser confirmada. Sincronize antes de tentar novamente.');}
+ const payload=await flowResponse(response),id=safe(payload.id,180);if(!id)throw new MetaFlowError('uncertain','invalid_response','A Meta respondeu sem o identificador do Flow. Sincronize antes de tentar novamente.');return {id};
+}
+export async function uploadMetaFlowJson(config:MetaConfiguration,flowId:string,definition:Json,fetcher:MetaFetcher=fetch){
+ const form=new FormData();form.set('name','flow.json');form.set('asset_type','FLOW_JSON');form.set('file',new Blob([JSON.stringify(definition)],{type:'application/json'}),'flow.json');
+ let response:Response;try{response=await fetcher(endpoint(config,`${encodeURIComponent(flowId)}/assets`),{method:'POST',headers:{Authorization:`Bearer ${config.accessToken}`},body:form,cache:'no-store'});}catch{throw new MetaFlowError('uncertain','network_unknown','A validação do Flow não pôde ser confirmada. Sincronize antes de tentar novamente.');}
+ const payload=await flowResponse(response),validationErrors=Array.isArray(payload.validation_errors)?payload.validation_errors:[];return {success:payload.success===true,validationErrors};
+}
+async function mutateMetaFlow(config:MetaConfiguration,flowId:string,action:'publish'|'deprecate',fetcher:MetaFetcher){let response:Response;try{response=await fetcher(endpoint(config,`${encodeURIComponent(flowId)}/${action}`),{method:'POST',headers:headers(config),body:'{}',cache:'no-store'});}catch{throw new MetaFlowError('uncertain','network_unknown',`A operação ${action} não pôde ser confirmada. Sincronize o Flow.`);}const payload=await flowResponse(response);if(payload.success!==true)throw new MetaFlowError('uncertain','invalid_response','A Meta não confirmou a operação. Sincronize o Flow.');return {success:true};}
+export async function publishMetaFlow(config:MetaConfiguration,flowId:string,fetcher:MetaFetcher=fetch){return mutateMetaFlow(config,flowId,'publish',fetcher);}
+export async function deprecateMetaFlow(config:MetaConfiguration,flowId:string,fetcher:MetaFetcher=fetch){return mutateMetaFlow(config,flowId,'deprecate',fetcher);}
 export async function uploadMetaMedia(config:MetaConfiguration,file:File,fetcher:MetaFetcher=fetch){
  const form=new FormData();form.set('messaging_product','whatsapp');form.set('type',file.type);form.set('file',file,file.name);
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);

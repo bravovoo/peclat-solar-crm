@@ -1,0 +1,31 @@
+import type {PoolClient} from 'pg';
+import {database,transaction} from '@/server/db';
+import {AccessError,requirePermission,type Actor} from '@/modules/auth/policy';
+import {assertWhatsAppConversation} from './inbox';
+import {flowSendInput} from './flow-domain';
+import {metaConfiguration,MetaSendError,sendMetaMessage,type MetaFetcher} from './meta';
+import {serviceWindow} from './domain';
+
+type Db=Pick<PoolClient,'query'>;
+type Integration={status:string;api_version:string;phone_number_id:string;business_account_id:string};
+type Flow={id:string;meta_flow_id:string;technical_name:string;display_name:string;status:string};
+type Existing={id:string;conversation_id:string;safe_metadata:Record<string,unknown>;delivery_status:string;meta_message_id:string|null};
+function access(actor:Actor){requirePermission(actor,'whatsapp.use');}
+async function integration(actor:Actor,db:Db){const result=await db.query<Integration>(`SELECT status,api_version,phone_number_id,business_account_id FROM whatsapp_integrations WHERE organization_id=$1 FOR SHARE`,[actor.organizationId]);if(!result.rowCount||result.rows[0].status!=='connected')throw new AccessError(503,'A integração do WhatsApp não está conectada.');return result.rows[0];}
+export async function listPublishedFlows(actor:Actor){access(actor);const result=await database().query<Flow>(`SELECT id,meta_flow_id,technical_name,display_name,status FROM whatsapp_flows WHERE organization_id=$1 AND status='PUBLISHED' AND meta_flow_id IS NOT NULL ORDER BY display_name,id`,[actor.organizationId]);return result.rows;}
+export async function sendWhatsAppFlow(actor:Actor,conversationId:string,input:unknown,fetcher?:MetaFetcher){
+ access(actor);const data=flowSendInput.parse(input);
+ const reservation=await transaction(async db=>{
+  const currentIntegration=await integration(actor,db),conversation=await assertWhatsAppConversation(actor,conversationId,db,true),existing=await db.query<Existing>('SELECT id,conversation_id,safe_metadata,delivery_status,meta_message_id FROM whatsapp_messages WHERE organization_id=$1 AND client_request_id=$2',[actor.organizationId,data.client_request_id]);
+  if(existing.rowCount){if(existing.rows[0].conversation_id!==conversationId||existing.rows[0].safe_metadata?.flow_id!==data.flow_id)throw new AccessError(409,'Identificador de envio já utilizado com outro formulário.');return {existing:existing.rows[0]};}
+  if(!serviceWindow(conversation.last_inbound_at?new Date(conversation.last_inbound_at):null).open)throw new AccessError(409,'A janela de atendimento está encerrada. Use futuramente um modelo aprovado com botão de Flow.');
+  const found=await db.query<Flow>(`SELECT id,meta_flow_id,technical_name,display_name,status FROM whatsapp_flows WHERE organization_id=$1 AND id=$2 FOR SHARE`,[actor.organizationId,data.flow_id]);if(!found.rowCount||found.rows[0].status!=='PUBLISHED'||!found.rows[0].meta_flow_id)throw new AccessError(400,'Flow publicado não encontrado.');const flow=found.rows[0],flowToken=`${flow.id}.${crypto.randomUUID()}`;
+  const metadata={flow_id:flow.id,meta_flow_id:flow.meta_flow_id,flow_token:flowToken,technical_name:flow.technical_name,display_name:flow.display_name};
+  const inserted=await db.query<{id:string}>(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,meta_timestamp,processing_status,sent_by,client_request_id,delivery_status,safe_metadata,origin) VALUES ($1,$2,NULL,'outbound','interactive',$3,'',now(),'processed',$4,$5,'pending',$6,'manual') RETURNING id`,[actor.organizationId,conversationId,`Formulário enviado: ${flow.display_name}`,actor.userId,data.client_request_id,JSON.stringify(metadata)]);
+  await db.query(`INSERT INTO audit_logs(organization_id,actor_id,action,detail) VALUES ($1,$2,'whatsapp.flow_send_requested',$3)`,[actor.organizationId,actor.userId,`Conversa ${conversationId}; Flow ${flow.id}.`]);
+  return {messageId:inserted.rows[0].id,config:metaConfiguration(currentIntegration),payload:{messaging_product:'whatsapp',recipient_type:'individual',to:conversation.external_wa_id,type:'interactive',interactive:{type:'flow',header:{type:'text',text:'Orçamento de energia solar'},body:{text:'Preencha algumas informações para que nossa equipe possa analisar seu projeto.'},footer:{text:'Peclat Solar'},action:{name:'flow',parameters:{flow_message_version:'3',flow_token:flowToken,flow_id:flow.meta_flow_id,flow_cta:'Solicitar orçamento',flow_action:'navigate',flow_action_payload:{screen:'IDENTIFICATION',data:{}}}}}}};
+ });
+ if('existing' in reservation)return reservation.existing;
+ try{const sent=await sendMetaMessage(reservation.config,reservation.payload,fetcher);await transaction(async db=>{await db.query(`UPDATE whatsapp_messages SET meta_message_id=$3,delivery_status='sent',sent_at=now(),outcome_uncertain=false WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,sent.wamid]);await db.query(`UPDATE whatsapp_conversations SET last_message_preview='Formulário de orçamento enviado',last_message_type='interactive',last_message_at=now(),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[actor.organizationId,conversationId]);});}catch(error){if(error instanceof MetaSendError){if(error.kind==='rejected')await database().query(`UPDATE whatsapp_messages SET delivery_status='failed',failed_at=now(),failure_code=$3,failure_title=$4,failure_detail=$5 WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,error.safeCode,error.safeTitle,error.safeDetail]);else await database().query(`UPDATE whatsapp_messages SET outcome_uncertain=true,failure_code=$3,failure_title=$4,failure_detail=$5 WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,error.safeCode,error.safeTitle,error.safeDetail]);throw new AccessError(502,error.kind==='uncertain'?'O resultado do envio não pôde ser confirmado. Não reenvie automaticamente.':'Não foi possível enviar o formulário pelo WhatsApp.');}throw error;}
+ return (await database().query('SELECT id,conversation_id,message_type,text_body,delivery_status,meta_message_id FROM whatsapp_messages WHERE organization_id=$1 AND id=$2',[actor.organizationId,reservation.messageId])).rows[0];
+}

@@ -9,6 +9,7 @@ import { migrate } from './migrate';
 import { seed } from './seed';
 import { database } from '../src/server/db';
 import { hashPassword } from '../src/modules/auth/crypto';
+import {solarBudgetDefaultMappings,solarBudgetFlowJson} from '../src/modules/whatsapp/solar-budget-flow';
 const port=await new Promise<number>(done=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const a=s.address();if(a&&typeof a==='object')s.close(()=>done(a.port));});});
 await mkdir(resolve('.local/tests'),{recursive:true});
 const dir=await mkdtemp(resolve('.local/tests/e2e-'));
@@ -19,9 +20,11 @@ process.env.DATABASE_URL=`postgresql://e2e:e2e_database_only@127.0.0.1:${port}/p
 process.env.APP_URL='http://localhost:3100';process.env.SEED_ADMIN_EMAIL='admin@e2e.local';process.env.SEED_ADMIN_PASSWORD='Peclat teste seguro 2026';process.env.SEED_ADMIN_NAME='Admin de teste';
 process.env.AI_TEST_MODE='true';
 const metaTemplates=[{id:'template-e2e',name:'retomar_atendimento',language:'pt_BR',category:'UTILITY',status:'APPROVED',components:[{type:'BODY',text:'Olá {{1}}, podemos continuar seu atendimento?'}]}];
+const metaFlows=[{id:'flow-e2e',name:'peclat_solicitar_orcamento_solar',categories:['LEAD_GENERATION'],status:'PUBLISHED',validation_errors:[],json_version:'7.3',data_api_version:'3.0',preview:{preview_url:'https://business.facebook.com/wa/manage/flows/preview/'},health_status:{can_send:true}}];
 const meta=createHttpServer((request,response)=>{
  response.setHeader('content-type','application/json');const path=request.url??'';
- if(request.method==='GET'&&path.includes('/message_templates'))response.end(JSON.stringify({data:metaTemplates}));
+ if(request.method==='GET'&&/\/flows(?:\?|$)/.test(path))response.end(JSON.stringify({data:metaFlows}));
+ else if(request.method==='GET'&&path.includes('/message_templates'))response.end(JSON.stringify({data:metaTemplates}));
  else if(request.method==='POST'&&path.includes('/message_templates')){const chunks:Buffer[]=[];request.on('data',(chunk:Buffer)=>chunks.push(chunk));request.on('end',()=>{const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));const item={id:`template-e2e-${metaTemplates.length+1}`,name:body.name,language:body.language,category:body.category,status:'PENDING',components:body.components};metaTemplates.push(item);response.end(JSON.stringify({id:item.id,status:item.status,category:item.category}));});}
  else if(request.method==='GET'&&/\/v99\.0\/e2e-(audio|image|document)(?:\?|$)/.test(path)){const kind=path.match(/e2e-(audio|image|document)/)?.[1],address=meta.address();if(!address||typeof address==='string'){response.statusCode=500;response.end();return;}response.end(JSON.stringify({url:`http://127.0.0.1:${address.port}/media-bytes/${kind}`,mime_type:kind==='audio'?'audio/ogg':kind==='image'?'image/png':'application/pdf',file_size:kind==='audio'?8:kind==='image'?68:12}));}
  else if(request.method==='GET'&&path.startsWith('/media-bytes/')){const kind=path.split('/').at(-1),bytes=kind==='audio'?Buffer.from('OggSfake'):kind==='image'?Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL1GQAAAABJRU5ErkJggg==','base64'):Buffer.from('%PDF-1.4\n%%EOF');response.setHeader('content-type',kind==='audio'?'audio/ogg':kind==='image'?'image/png':'application/pdf');response.setHeader('accept-ranges','bytes');const range=request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);if(range){const start=Number(range[1]),end=range[2]?Math.min(Number(range[2]),bytes.length-1):bytes.length-1;response.statusCode=206;response.setHeader('content-range',`bytes ${start}-${end}/${bytes.length}`);response.end(bytes.subarray(start,end+1));}else response.end(bytes);}
@@ -34,6 +37,8 @@ const smtp=createServer(socket=>{socket.setEncoding('utf8');socket.write('220 lo
 const smtpPort=await new Promise<number>(done=>smtp.listen(0,'127.0.0.1',()=>{const address=smtp.address();if(address&&typeof address==='object')done(address.port);}));process.env.SMTP_HOST='127.0.0.1';process.env.SMTP_PORT=String(smtpPort);
 await migrate();await seed();
 const hash=await hashPassword('Peclat teste seguro 2026');
+const mobileUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('workspace-mobile@e2e.local','Admin mobile E2E',$1) RETURNING id",[hash])).rows[0];
+await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'admin' FROM organizations WHERE slug='peclat-solar'",[mobileUser.id]);
 const user=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('seller@e2e.local','Vendedor de teste',$1) RETURNING id",[hash])).rows[0];
 await database().query("INSERT INTO memberships(organization_id,user_id,role_code) SELECT id,$1,'seller' FROM organizations WHERE slug='peclat-solar'",[user.id]);
 const commercialManager=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ('manager@e2e.local','Gerente comercial de teste',$1) RETURNING id",[hash])).rows[0];
@@ -57,6 +62,8 @@ await database().query("INSERT INTO crm_tags(organization_id,name,color) VALUES 
 await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,whatsapp) VALUES ($1,'customer',$2,'Cliente duplicidade E2E','5531983334455')",[whatsappOrganization,whatsappUser.id]);
 await database().query(`INSERT INTO whatsapp_integrations(organization_id,status,webhook_status,last_event_at,last_event_type,account_name,phone_number_id,business_account_id,display_phone_number,api_version,created_by,updated_by)
  VALUES ($1,'connected','receiving',now(),'messages.text','Peclat Solar E2E','100000000001','200000000001','+55 31 99999-1234','v99.0',$2,$2)`,[whatsappOrganization,whatsappUser.id]);
+const flow=(await database().query<{id:string}>(`INSERT INTO whatsapp_flows(organization_id,meta_flow_id,technical_name,display_name,category,status,json_version,data_api_version,flow_json,validation_errors,health_status,preview_url,published_at,synced_at,created_by,updated_by) VALUES ($1,'flow-e2e','peclat_solicitar_orcamento_solar','Peclat Solar - Solicitar Orçamento','LEAD_GENERATION','PUBLISHED','7.3','3.0',$2,'[]',$3,'https://business.facebook.com/wa/manage/flows/preview/',now(),now(),$4,$4) RETURNING id`,[whatsappOrganization,JSON.stringify(solarBudgetFlowJson()),JSON.stringify({can_send:true}),whatsappUser.id])).rows[0];
+for(const [flowField,crmField,label] of solarBudgetDefaultMappings)await database().query(`INSERT INTO whatsapp_flow_field_mappings(organization_id,flow_id,flow_field,crm_field,label) VALUES ($1,$2,$3,$4,$5)`,[whatsappOrganization,flow.id,flowField,crmField,label]);
 const linkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,last_inbound_at,unread_count,record_id,link_status,link_source)
  VALUES ($1,'5531991112233','+5531991112233','Cliente Inbox','Preciso acompanhar meu projeto','text',now(),now(),2,$2,'identified','automatic') RETURNING id`,[whatsappOrganization,whatsappCustomer])).rows[0].id;
 const unlinkedConversation=(await database().query(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,last_message_preview,last_message_type,last_message_at,last_inbound_at,unread_count,link_status,link_source)

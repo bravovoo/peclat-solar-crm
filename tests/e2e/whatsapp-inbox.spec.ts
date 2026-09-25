@@ -34,6 +34,13 @@ async function receiveUnsupported(page:Page,id:string){
  return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
 }
 
+async function receiveFlowReply(page:Page,id:string,contextId:string,flowToken:string){
+ const response={flow_token:flowToken,full_name:'Cliente Inbox E2E',city:'Florianópolis',state:'SC',property_type:'1',average_bill:'850,00',has_bill:'1',property_owned:'1',commercial_interest:'2',technical_visit:'1',preferred_contact_period:'2',observations:'Teste local do formulário.'};
+ const payload=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'200000000001',changes:[{field:'messages',value:{metadata:{phone_number_id:'100000000001'},messages:[{from:'5531991112233',id,timestamp:String(Math.floor(Date.now()/1000)),type:'interactive',context:{id:contextId},interactive:{type:'nfm_reply',nfm_reply:{name:'flow',body:'Sent',response_json:JSON.stringify(response)}}}]}}]}]});
+ const signature='sha256='+createHmac('sha256','e2e-fake-app-secret').update(payload).digest('hex');
+ return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
+}
+
 async function scrollMetrics(page:Page,testId:string){
  return page.getByTestId(testId).evaluate(element=>({clientHeight:element.clientHeight,scrollHeight:element.scrollHeight,scrollTop:element.scrollTop,distance:element.scrollHeight-element.scrollTop-element.clientHeight}));
 }
@@ -72,15 +79,12 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  const expired=detailJson.messages.find(message=>message.media_id==='e2e-expired');expect(expired).toBeTruthy();
  expect((await page.request.get(`/api/whatsapp/conversations/${conversationId}/messages/${expired!.id}/media`)).status()).toBe(404);
  const expiredBubble=page.locator(`[data-message-id="${expired!.id}"]`);await expiredBubble.scrollIntoViewIfNeeded();await expect(expiredBubble.getByText('Mídia não está mais disponível.')).toBeVisible();
- await page.getByTestId('message-history').evaluate(element=>element.scrollTo({top:element.scrollHeight}));
-
- const layout=page.getByTestId('whatsapp-layout');
+ const layoutBox=await page.getByTestId('whatsapp-layout').boundingBox();
+ expect(layoutBox?.height).toBeGreaterThan(650);
+ expect(layoutBox?.y).toBeLessThan(180);
  const history=page.getByTestId('message-history');
  await expect(page.getByTestId('conversation-header')).toBeVisible();
  await expect(page.getByTestId('message-composer')).toBeVisible();
- const layoutBox=await layout.boundingBox();
- expect(layoutBox?.height).toBeGreaterThan(650);
- expect(layoutBox?.y).toBeLessThan(180);
  await expect.poll(async()=>(await scrollMetrics(page,'message-history')).distance).toBeLessThanOrEqual(4);
  const initialHistory=await scrollMetrics(page,'message-history');
  expect(initialHistory.scrollHeight).toBeGreaterThan(initialHistory.clientHeight);
@@ -92,6 +96,8 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  const loadHistory=page.getByRole('button',{name:'Carregar mensagens anteriores'});await expect(loadHistory).toHaveCount(1);await loadHistory.click();
  await expect(history.getByText('Mensagem histórica de teste 1',{exact:true})).toHaveCount(1);
  const historyIds=await history.locator('[data-message-id]').evaluateAll(elements=>elements.map(element=>element.getAttribute('data-message-id')));expect(historyIds.length).toBeGreaterThan(100);expect(new Set(historyIds).size).toBe(historyIds.length);await expect(loadHistory).toHaveCount(0);await history.evaluate(element=>element.scrollTo({top:element.scrollHeight}));
+ await page.getByRole('button',{name:'Enviar formulário'}).click();const flowDialog=page.getByRole('dialog',{name:'Enviar formulário'});await expect(flowDialog.getByText('Peclat Solar - Solicitar Orçamento')).toBeVisible();page.once('dialog',dialog=>void dialog.dismiss());await flowDialog.getByRole('button',{name:/Peclat Solar - Solicitar Orçamento/}).click();await expect(flowDialog).toBeVisible();await expect(history.getByText('Formulário enviado: Peclat Solar - Solicitar Orçamento',{exact:true})).toHaveCount(0);page.once('dialog',dialog=>void dialog.accept());await flowDialog.getByRole('button',{name:/Peclat Solar - Solicitar Orçamento/}).click();await expect(page.getByRole('status')).toContainText('Formulário enviado pelo WhatsApp');await expect(history.getByText('Formulário enviado: Peclat Solar - Solicitar Orçamento',{exact:true})).toBeVisible();
+ const flowDetail=await (await page.request.get(`/api/whatsapp/conversations/${conversationId}`)).json() as {messages:{meta_message_id:string;message_type:string;safe_metadata:{flow_token?:string}}[]},flowMessage=flowDetail.messages.find(message=>message.message_type==='interactive'&&message.safe_metadata.flow_token);expect(flowMessage?.meta_message_id).toBeTruthy();expect(flowMessage?.safe_metadata.flow_token).toBeTruthy();expect((await receiveFlowReply(page,`wamid.e2e.flow.reply.${Date.now()}`,flowMessage!.meta_message_id,flowMessage!.safe_metadata.flow_token!)).status()).toBe(200);await expect(history.getByText('FORMULÁRIO PREENCHIDO',{exact:true})).toBeVisible({timeout:20000});await expect(history.getByText('R$ 850,00',{exact:true})).toBeVisible();await expect(history.getByRole('link',{name:'Ver cadastro'})).toBeVisible();await history.evaluate(element=>element.scrollTo({top:element.scrollHeight}));
  const assistant=page.getByTestId('commercial-ai-assistant');await expect(assistant).toContainText('Como posso ajudar?');
  await assistant.getByRole('button',{name:'Resumir',exact:true}).click();await expect(assistant.getByText(/procura atendimento solar/)).toBeVisible();
  await assistant.getByRole('button',{name:'Próxima ação',exact:true}).click();await expect(assistant.getByText(/Solicitar a conta de energia/)).toBeVisible();

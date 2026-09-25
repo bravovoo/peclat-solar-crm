@@ -48,6 +48,7 @@ test('admin cria, simula, ativa e desativa regra sem executar ação externa',as
  await card.getByRole('button',{name:'Editar'}).click();
  await page.getByLabel('Descrição').fill('Regra editada depois da ativação');
  await page.getByRole('button',{name:'Salvar regra'}).click();
+ await expect(page.getByRole('heading',{name:'Monte uma regra simples'})).toBeVisible();
  await expect(card.getByText('Regra ativa',{exact:true})).toBeVisible();
  await card.getByRole('button',{name:'Editar'}).click();
  await page.getByLabel('Nome',{exact:true}).fill('Alteração cancelada');
