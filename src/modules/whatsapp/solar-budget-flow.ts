@@ -4,7 +4,7 @@ export const SOLAR_FLOW_JSON_VERSION='7.3';
 
 const states=['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(value=>({id:value,title:value}));
 const choices=(items:string[])=>items.map((title,index)=>({id:String(index+1),title}));
-const data=(names:string[])=>Object.fromEntries(names.map(name=>[name,{type:'string',__example__:''}]));
+const data=(names:string[])=>Object.fromEntries(names.map(name=>[name,name==='average_bill'?{type:'number',__example__:850}:{type:'string',__example__:''}]));
 const navigate=(name:string,payload:Record<string,string>)=>({name:'navigate',next:{type:'screen',name},payload});
 
 export function solarBudgetFlowJson(){
