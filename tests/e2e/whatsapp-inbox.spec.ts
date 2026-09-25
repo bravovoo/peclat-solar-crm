@@ -17,6 +17,11 @@ async function receiveText(page:Page,id:string,text:string,from='5531991112233',
  return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
 }
 
+async function receiveConversationBatch(page:Page,count:number){
+ const timestamp=String(Math.floor(Date.now()/1000)),entries=Array.from({length:count},(_,index)=>{const number=String(5561900000000+index);return {id:'200000000001',changes:[{field:'messages',value:{metadata:{phone_number_id:'100000000001'},contacts:[{wa_id:number,profile:{name:`Conversa progressiva ${String(index+1).padStart(2,'0')}`}}],messages:[{from:number,id:`wamid.e2e.progressive.${index}.${Date.now()}`,timestamp,type:'text',text:{body:`progressive-e2e ${index+1}`}}]}}]};}),payload=JSON.stringify({object:'whatsapp_business_account',entry:entries}),signature='sha256='+createHmac('sha256','e2e-fake-app-secret').update(payload).digest('hex');
+ return page.request.post('/api/whatsapp/webhook',{data:payload,headers:{'content-type':'application/json','x-hub-signature-256':signature}});
+}
+
 async function receiveEchoText(page:Page,id:string,text:string,to='5531991112233'){
  const payload=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'200000000001',changes:[{field:'smb_message_echoes',value:{metadata:{phone_number_id:'100000000001'},message_echoes:[{from:'5531999991234',to,id,timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:text}}]}}]}]});
  const signature='sha256='+createHmac('sha256','e2e-fake-app-secret').update(payload).digest('hex');
@@ -255,5 +260,12 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect(inboxPage.getByRole('link',{name:'Ver Lead'})).toHaveCount(0);
  await expect(inboxPage.getByRole('button',{name:'Vincular ao CRM'})).toBeVisible();
  await expect(inboxPage.getByTestId('message-history').getByText('Quero falar com a equipe',{exact:true})).toBeVisible();
+ expect((await receiveConversationBatch(inboxPage,35)).status()).toBe(200);
+ await expect.poll(async()=>{const response=await inboxPage.request.get('/api/whatsapp/conversations?q=progressive-e2e');return ((await response.json()) as {total:number}).total;},{timeout:20000}).toBe(35);
+ await inboxPage.getByLabel('Buscar conversas').fill('progressive-e2e');await inboxPage.getByRole('button',{name:'Aplicar filtros'}).click();
+ const progressiveList=inboxPage.getByTestId('conversation-list');await expect(progressiveList.locator('.whatsapp-conversation')).toHaveCount(30);await expect(inboxPage.getByRole('button',{name:'Carregar mais conversas'})).toBeVisible();
+ await progressiveList.evaluate(element=>element.scrollTo({top:element.scrollHeight}));await expect(progressiveList.locator('.whatsapp-conversation')).toHaveCount(35,{timeout:20000});await expect(inboxPage.getByRole('button',{name:'Carregar mais conversas'})).toHaveCount(0);
+ const progressiveNames=await progressiveList.locator('.whatsapp-conversation strong').allTextContents();expect(new Set(progressiveNames).size).toBe(35);
+ await inboxPage.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await inboxPage.waitForTimeout(1200);await expect(progressiveList.locator('.whatsapp-conversation')).toHaveCount(35);
  await inboxPage.close();
 });

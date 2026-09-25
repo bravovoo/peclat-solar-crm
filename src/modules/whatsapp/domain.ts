@@ -25,7 +25,7 @@ export function normalizeWhatsAppNumber(value:string):NormalizedWhatsAppNumber{
  }
  return {original,digits,e164:valid?`+${digits}`:null,valid};
 }
-export const whatsappConversationFilters=z.object({q:z.string().trim().max(120).default(''),unread:z.enum(['all','unread']).default('all'),link:z.enum(['all','linked','unlinked']).default('all'),page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(30)});
+export const whatsappConversationFilters=z.object({q:z.string().trim().max(120).default(''),unread:z.enum(['all','unread']).default('all'),link:z.enum(['all','linked','unlinked']).default('all'),page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(30),before_timestamp:z.string().datetime({offset:true}).optional(),before_id:z.string().uuid().optional()}).refine(value=>Boolean(value.before_timestamp)===Boolean(value.before_id),{message:'Cursor de conversas inválido.'});
 export const whatsappLinkInput=z.object({record_id:z.uuid().nullable(),version:z.number().int().positive()}).strict();
 export const whatsappReadInput=z.object({version:z.number().int().positive()}).strict();
 export const whatsappLeadInput=z.object({name:z.string().trim().min(2,'Informe um nome com pelo menos 2 caracteres.').max(180),email:safeText(254).transform(value=>value.toLowerCase()).refine(value=>!value||z.email().safeParse(value).success,'E-mail inválido.'),notes:safeText(4000),tag_ids:z.array(z.uuid()).max(30).default([])}).strict();

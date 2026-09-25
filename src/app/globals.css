@@ -213,6 +213,8 @@
 .whatsapp-list-heading h2,.whatsapp-info-heading h2{font-size:13px;font-weight:800;color:#24495d}
 .whatsapp-list-heading .badge{font-size:10px;padding:3px 7px}
 .whatsapp-conversation-scroll{scrollbar-gutter:auto}
+.whatsapp-load-conversations{display:block;width:calc(100% - 24px);margin:12px;padding:9px 12px;border:1px solid #c8d9df;border-radius:8px;background:#f5faf9;color:#176b58;font-size:11px;font-weight:800;cursor:pointer}
+.whatsapp-load-conversations:hover:not(:disabled){border-color:#5bb9a1;background:#eaf7f3}.whatsapp-load-conversations:disabled{cursor:default;opacity:.65}
 .whatsapp-conversation{gap:9px;align-items:flex-start;min-height:70px;padding:11px 12px;border-bottom-color:#edf1f2}
 .whatsapp-conversation .avatar{width:33px;height:33px;flex-basis:33px;font-size:13px}
 .whatsapp-conversation-main strong{font-size:12px}
@@ -340,6 +342,7 @@
  html[data-theme=dark] :where(.avatar,.whatsapp-contact .avatar){background:#26364b;color:#a7f3d0;border-color:#405269}
  html[data-theme=dark] :where(.breadcrumb,.breadcrumb strong,.app-footer,.stat-card>div,.stat-card>strong,.stat-card>small,.stat-footer,.journey-step small,.journey-step p,.setup-row small,.activity-row small,.activity-row time,.crm-feed-item>p,.kanban-column header strong,.kanban-empty,.opportunity-value,.opportunity-card>small,.energy-bar-column>small,.energy-empty,.sizing-result-grid strong,.sizing-result>footer,.sizing-explanation,.document-title>strong,.document-main .document-notes,.document-history-heading,.whatsapp-title,.whatsapp-filter-select select,.whatsapp-list-heading h2,.whatsapp-info-heading h2,.whatsapp-info-section h4,.whatsapp-ai-result p,.whatsapp-ai-result li){color:var(--text)}
  html[data-theme=dark] :where(.record-name,.text-link,.back-link,.crm-tabs button.selected,.follow-item strong,.search-group a span){color:#7dd3fc}
+ html[data-theme=dark] .whatsapp-load-conversations{border-color:#405269;background:#1b2a3d;color:#a7f3d0}
  html[data-theme=dark] :where(.crm-search,.global-search-button,.whatsapp-search,.whatsapp-info-toggle,.whatsapp-info-close,.whatsapp-back){color:#b6c4d4}
  html[data-theme=dark] :where(.crm-tabs button,.table-secondary,.whatsapp-conversation-main small,.whatsapp-conversation-meta time,.whatsapp-contact>p,.whatsapp-info-section p,.whatsapp-info-section dt){color:var(--muted)}
  html[data-theme=dark] :where(.crm-modal,.whatsapp-layout){box-shadow:0 22px 70px #02061780}
