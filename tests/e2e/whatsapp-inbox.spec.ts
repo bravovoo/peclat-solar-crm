@@ -1,4 +1,4 @@
-import {test,expect,request as playwrightRequest,type Page} from '@playwright/test';
+import {test,expect,request as playwrightRequest,type Page,type Route} from '@playwright/test';
 import {createHmac} from 'node:crypto';
 
 const password='Peclat teste seguro 2026';
@@ -57,6 +57,13 @@ test('inbox mantém layout estável, rolagem inteligente, envio e vínculo respo
  await expect(page.getByRole('img',{name:'Painel instalado'})).toHaveCount(1);
  await expect(page.getByRole('link',{name:'Ampliar imagem'})).toHaveCount(1);
  const conversationId=audioUrl!.split('/')[4],detailResponse=await page.request.get(`/api/whatsapp/conversations/${conversationId}`),detailJson=await detailResponse.json() as {messages:{id:string;media_id:string}[]};
+ const emptyConversationApi='**/api/whatsapp/conversations**',emptyDetailHandler=(route:Route)=>route.fulfill({status:503,body:''});
+ await page.route(emptyConversationApi,emptyDetailHandler);
+ await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'visible'});document.dispatchEvent(new Event('visibilitychange'));});
+ await expect(page.getByRole('alert').filter({hasText:'Serviço indisponível no momento. Tente novamente.'})).toBeVisible({timeout:20000});
+ await page.unroute(emptyConversationApi,emptyDetailHandler);
+ await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+ await expect(page.getByRole('alert').filter({hasText:'Serviço indisponível no momento. Tente novamente.'})).toHaveCount(0,{timeout:20000});
  const expired=detailJson.messages.find(message=>message.media_id==='e2e-expired');expect(expired).toBeTruthy();
  expect((await page.request.get(`/api/whatsapp/conversations/${conversationId}/messages/${expired!.id}/media`)).status()).toBe(404);
  const expiredBubble=page.locator(`[data-message-id="${expired!.id}"]`);await expiredBubble.scrollIntoViewIfNeeded();await expect(expiredBubble.getByText('Mídia não está mais disponível.')).toBeVisible();
