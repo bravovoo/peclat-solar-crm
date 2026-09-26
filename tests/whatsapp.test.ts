@@ -8,11 +8,23 @@ import {flowCreateInput,flowSendInput} from '../src/modules/whatsapp/flow-domain
 import {solarBudgetFlowJson} from '../src/modules/whatsapp/solar-budget-flow';
 import {bodyVariableCount,renderTemplatePreview,templateDraftCreateInput} from '../src/modules/whatsapp/template-manager-domain';
 import {prepareWhatsAppMedia} from '../src/modules/whatsapp/media';
+import {inferWhatsAppTemplateParameters,renderWhatsAppTemplateText,whatsappTemplateFirstName} from '../src/modules/whatsapp/template-parameters';
 import {OpenAiCommercialProvider,GeminiCommercialAiProvider,AiProviderError,configuredAiProvider} from '../src/modules/ai/provider';
 import type {CommercialAiContext} from '../src/modules/ai/domain';
 const config:MetaConfiguration={apiVersion:'v99.0',phoneNumberId:'123',businessAccountId:'456',accessToken:'segredo-de-teste'};
 test('janela de atendimento usa limite estrito de 24 horas',()=>{const now=new Date('2026-09-19T12:00:00Z');assert.equal(serviceWindow(new Date('2026-09-18T12:01:00Z'),now).open,true);assert.equal(serviceWindow(new Date('2026-09-18T12:00:00Z'),now).open,false);assert.equal(serviceWindow(new Date('2026-09-18T11:59:59Z'),now).open,false);assert.equal(serviceWindow(null,now).open,false);});
 test('payloads outbound exigem UUID, texto e parâmetros limitados',()=>{assert.equal(whatsappTextSendInput.safeParse({client_request_id:crypto.randomUUID(),text:'Olá'}).success,true);assert.equal(whatsappTextSendInput.safeParse({client_request_id:crypto.randomUUID(),text:''}).success,false);assert.equal(whatsappTextSendInput.safeParse({client_request_id:crypto.randomUUID(),text:'x'.repeat(4097)}).success,false);assert.equal(whatsappTemplateSendInput.safeParse({client_request_id:'spoof',template_id:'x',parameters:{header:[],body:[]}}).success,false);});
+test('parâmetros de recuperação usam primeiro nome, fallback e não vazam entre conversas',()=>{
+ const template={name:'peclat_recuperacao_lead_1',header_parameters:0,body_parameters:2};
+ assert.equal(whatsappTemplateFirstName({recordName:'Juliana Tavares',recordKind:'lead',profileName:'Juh'}),'Juliana');
+ assert.equal(whatsappTemplateFirstName({recordName:'Leandro Henrique Souza',recordKind:'customer'}),'Leandro');
+ assert.equal(whatsappTemplateFirstName({recordName:'Rodrigo',recordKind:'lead'}),'Rodrigo');
+ assert.equal(whatsappTemplateFirstName({recordName:'',profileName:'Não identificada'}),'Cliente');
+ const juliana=inferWhatsAppTemplateParameters(template,{recordName:'Juliana Tavares',recordKind:'lead',profileName:'Juh'}),leandro=inferWhatsAppTemplateParameters(template,{recordName:'Leandro Henrique',recordKind:'lead'});
+ assert.deepEqual(juliana,{header:[],body:['Juliana','']});assert.deepEqual(leandro,{header:[],body:['Leandro','']});
+ assert.equal(renderWhatsAppTemplateText('Olá, {{1}}! Proposta {{2}}.',juliana.body),'Olá, Juliana! Proposta {{2}}.');
+ assert.deepEqual(inferWhatsAppTemplateParameters({name:'outro_modelo',header_parameters:1,body_parameters:1},{recordName:'Juliana Tavares'}),{header:[''],body:['']});
+});
 test('cliente Meta monta endpoint oficial sem expor token no payload',async()=>{let captured='';const result=await sendMetaMessage(config,{messaging_product:'whatsapp',to:'5511999999999',type:'text',text:{body:'Olá'}},async(input,init)=>{captured=input+' '+String(init?.body);assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer segredo-de-teste');return new Response(JSON.stringify({messages:[{id:'wamid.mock'}]}),{status:200,headers:{'content-type':'application/json'}});});assert.equal(result.wamid,'wamid.mock');assert.equal(captured.includes('segredo-de-teste'),false);});
 test('mensagem inicial unificada é reconhecida como pedido explícito de autorização',()=>{assert.equal(isExplicitWhatsAppMarketingPrompt(initialWelcomeConsentPrompt),true);});
 test('cliente Meta diferencia recusa de resultado ambíguo e nunca repete POST',async()=>{let calls=0;await assert.rejects(()=>sendMetaMessage(config,{type:'text'},async()=>{calls++;return new Response(JSON.stringify({error:{code:131047,message:'Fora da janela'}}),{status:400});}),error=>error instanceof MetaSendError&&error.kind==='rejected');assert.equal(calls,1);await assert.rejects(()=>sendMetaMessage(config,{type:'text'},async()=>{calls++;throw new Error('socket');}),error=>error instanceof MetaSendError&&error.kind==='uncertain');assert.equal(calls,2);await assert.rejects(()=>sendMetaMessage(config,{type:'text'},async()=>new Response('{}',{status:200})),error=>error instanceof MetaSendError&&error.kind==='uncertain');});
