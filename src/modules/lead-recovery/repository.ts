@@ -19,7 +19,7 @@ function operate(actor:Actor){requirePermission(actor,'lead_recovery.operate');}
 export async function recoverySettings(actor:Actor){
  read(actor);const loaded=await loadRecoveryConfig(database(),actor.organizationId);
  if(loaded)return loaded;
- return {settings:{organization_id:actor.organizationId,enabled:false,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:defaultHours,lead_stages:defaultStages,seller_ids:[],version:1,updated_by:actor.userId,created_at:null,updated_at:null},steps:[]};
+ return {settings:{organization_id:actor.organizationId,enabled:false,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:defaultHours,lead_stages:defaultStages,seller_ids:[],default_owner_id:actor.userId,version:1,updated_by:actor.userId,created_at:null,updated_at:null},steps:[]};
 }
 
 export async function recoveryOptions(actor:Actor){
@@ -39,14 +39,16 @@ export async function saveRecoverySettings(actor:Actor,input:unknown){
   if(templates.rowCount!==new Set(templateIds).size)throw new AccessError(400,'Selecione somente modelos aprovados e suportados desta organização.');
   for(const step of data.steps){const template=templates.rows.find(row=>row.id===step.template_id);if(!template||step.header_parameters.length!==templateParameterCount(template.components,'HEADER')||step.body_parameters.length!==templateParameterCount(template.components,'BODY'))throw new AccessError(400,`Preencha os parâmetros exigidos pela tentativa ${step.position}.`);}
   for(const seller of data.seller_ids)await assertCommercialAssignee(actor,seller,db);
+  const defaultOwner=await db.query(`SELECT 1 FROM memberships membership JOIN users owner ON owner.id=membership.user_id WHERE membership.organization_id=$1 AND membership.user_id=$2 AND membership.role_code='admin' AND membership.active AND owner.active`,[actor.organizationId,data.default_owner_id]);
+  if(!defaultOwner.rowCount)throw new AccessError(400,'Selecione um administrador ativo desta organização como responsável padrão.');
   if(data.enabled){
    const integration=await db.query("SELECT 1 FROM whatsapp_integrations WHERE organization_id=$1 AND status='connected'",[actor.organizationId]);
    if(!integration.rowCount)throw new AccessError(409,'Conecte o WhatsApp Business antes de ativar a recuperação.');
    const global=await db.query<{whatsapp_outbound_enabled:boolean}>('SELECT whatsapp_outbound_enabled FROM organization_automation_settings WHERE organization_id=$1',[actor.organizationId]);
    if(!global.rows[0]?.whatsapp_outbound_enabled)throw new AccessError(409,'Ative primeiro o envio externo automático nas configurações de Automações.');
   }
-  await db.query(`INSERT INTO organization_lead_recovery_settings(organization_id,enabled,include_uncontacted,timezone,business_hours,lead_stages,seller_ids,updated_by)
-   VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(organization_id) DO UPDATE SET enabled=EXCLUDED.enabled,include_uncontacted=EXCLUDED.include_uncontacted,timezone=EXCLUDED.timezone,business_hours=EXCLUDED.business_hours,lead_stages=EXCLUDED.lead_stages,seller_ids=EXCLUDED.seller_ids,updated_by=EXCLUDED.updated_by,version=organization_lead_recovery_settings.version+1,updated_at=now()`,[actor.organizationId,data.enabled,data.include_uncontacted,data.timezone,JSON.stringify(data.business_hours),data.lead_stages,data.seller_ids,actor.userId]);
+  await db.query(`INSERT INTO organization_lead_recovery_settings(organization_id,enabled,include_uncontacted,timezone,business_hours,lead_stages,seller_ids,default_owner_id,updated_by)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(organization_id) DO UPDATE SET enabled=EXCLUDED.enabled,include_uncontacted=EXCLUDED.include_uncontacted,timezone=EXCLUDED.timezone,business_hours=EXCLUDED.business_hours,lead_stages=EXCLUDED.lead_stages,seller_ids=EXCLUDED.seller_ids,default_owner_id=EXCLUDED.default_owner_id,updated_by=EXCLUDED.updated_by,version=organization_lead_recovery_settings.version+1,updated_at=now()`,[actor.organizationId,data.enabled,data.include_uncontacted,data.timezone,JSON.stringify(data.business_hours),data.lead_stages,data.seller_ids,data.default_owner_id,actor.userId]);
   await db.query('DELETE FROM lead_recovery_steps WHERE organization_id=$1',[actor.organizationId]);
   for(const step of data.steps)await db.query('INSERT INTO lead_recovery_steps(organization_id,position,delay_days,template_id,header_parameters,body_parameters) VALUES ($1,$2,$3,$4,$5,$6)',[actor.organizationId,step.position,step.delay_days,step.template_id,JSON.stringify(step.header_parameters),JSON.stringify(step.body_parameters)]);
   if(!data.enabled){await db.query("UPDATE lead_recovery_enrollments SET status='paused',state_reason='organization_disabled',version=version+1,updated_by=$2,updated_at=now() WHERE organization_id=$1 AND status='scheduled'",[actor.organizationId,actor.userId]);await db.query("UPDATE lead_recovery_attempts SET status='cancelled',completed_at=now(),safe_error='organization_disabled',updated_at=now() WHERE organization_id=$1 AND status IN ('pending','processing')",[actor.organizationId]);}

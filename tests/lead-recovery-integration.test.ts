@@ -15,6 +15,7 @@ import {refreshLeadRecoveryEnrollments,processLeadRecoveryAttempts} from '../src
 import {receiveMetaWebhook} from '../src/modules/whatsapp/webhook';
 import {processAutomaticConsentRequests} from '../src/modules/whatsapp/consent-request';
 import {automaticConsentPrompt} from '../src/modules/whatsapp/marketing-consent';
+import {assignUnownedWhatsAppLeads,defaultWhatsAppLeadOwner} from '../src/modules/whatsapp/lead-owner';
 import {loadLeadFacts,assessLead,loadRecoveryConfig} from '../src/modules/lead-recovery/eligibility';
 let server:EmbeddedPostgres,admin:Actor;let n=0;
 const base=new Date('2030-01-07T14:00:00Z'); // Monday 11h São Paulo
@@ -43,7 +44,7 @@ async function fixture(consent=true):Promise<Fixture>{
  const partial={org,actor,wa,phoneId,businessId,templates};await inbound(partial,at(-1));
   const c=(await database().query('SELECT id,record_id FROM whatsapp_conversations WHERE organization_id=$1',[org])).rows[0];
   const f={...partial,lead:c.record_id,conversation:c.id};if(consent)await explicitConsent(f,at(-1));await outbound(f,base);
- await saveRecoverySettings(actor,{enabled:true,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:['new'],seller_ids:[],steps:[2,5,7,10].map((day,i)=>({position:i+1,delay_days:day,template_id:templates[Math.min(i,2)],header_parameters:[],body_parameters:['{{lead_first_name}}']})),version:1});return f;
+ await saveRecoverySettings(actor,{enabled:true,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:['new'],seller_ids:[],default_owner_id:admin.userId,steps:[2,5,7,10].map((day,i)=>({position:i+1,delay_days:day,template_id:templates[Math.min(i,2)],header_parameters:[],body_parameters:['{{lead_first_name}}']})),version:1});return f;
 }
 async function inbound(f:Pick<Fixture,'wa'|'phoneId'|'businessId'>,date:Date,body='Resposta fictícia',contextId=''){
  const message={from:f.wa,id:`wamid.in.${crypto.randomUUID()}`,timestamp:String(date.getTime()/1000),type:'text',text:{body},...(contextId?{context:{id:contextId}}:{})};
@@ -66,6 +67,35 @@ const sends:string[]=[];
 const fake:typeof fetch=async(_url,init)=>{sends.push(JSON.parse(String(init?.body)).template.name);return new Response(JSON.stringify({messages:[{id:`wamid.mock.${crypto.randomUUID()}`}]}),{status:200});};
 async function cycle(f:Fixture){return (await database().query('SELECT * FROM lead_recovery_enrollments WHERE organization_id=$1 ORDER BY created_at DESC',[f.org])).rows[0];}
 async function pump(day:number,fetcher:typeof fetch=fake){await refreshLeadRecoveryEnrollments(at(day));return processLeadRecoveryAttempts(20,fetcher,at(day));}
+
+test('WhatsApp atribui administrador padrão sem substituir responsável e o backfill é idempotente e isolado',async()=>{
+ const f=await fixture();
+ assert.equal((await database().query('SELECT owner_id FROM crm_records WHERE id=$1',[f.lead])).rows[0].owner_id,admin.userId);
+ const otherUser=(await database().query("INSERT INTO users(email,name,password_hash) VALUES ($1,'Administrador alternativo','teste') RETURNING id",[`alternativo-${n}@test.local`])).rows[0].id;
+ await database().query("INSERT INTO memberships(organization_id,user_id,role_code) VALUES ($1,$2,'admin')",[f.org,otherUser]);
+ const preserved=(await database().query("INSERT INTO crm_records(organization_id,kind,owner_id,name,source) VALUES ($1,'lead',$2,'Lead já atribuído','WhatsApp') RETURNING id",[f.org,otherUser])).rows[0].id;
+ const unassigned=(await database().query("INSERT INTO crm_records(organization_id,kind,name,source) VALUES ($1,'lead','Lead sem responsável','WhatsApp') RETURNING id",[f.org])).rows[0].id;
+ const foreign=await fixture();const foreignLead=(await database().query("INSERT INTO crm_records(organization_id,kind,name,source) VALUES ($1,'lead','Lead de outra organização','WhatsApp') RETURNING id",[foreign.org])).rows[0].id;
+ await database().query('UPDATE organization_lead_recovery_settings SET default_owner_id=$2 WHERE organization_id=$1',[f.org,admin.userId]);
+ const first=await assignUnownedWhatsAppLeads(database(),f.org),second=await assignUnownedWhatsAppLeads(database(),f.org);
+ assert.equal(first.assigned,1);assert.equal(second.assigned,0);
+ assert.equal((await database().query('SELECT owner_id FROM crm_records WHERE id=$1',[preserved])).rows[0].owner_id,otherUser);
+ assert.equal((await database().query('SELECT owner_id FROM crm_records WHERE id=$1',[unassigned])).rows[0].owner_id,admin.userId);
+ assert.equal((await database().query('SELECT owner_id FROM crm_records WHERE id=$1',[foreignLead])).rows[0].owner_id,null);
+ assert.equal((await database().query("SELECT count(*)::int n FROM audit_logs WHERE organization_id=$1 AND action='whatsapp.owner_assigned' AND detail LIKE '%'||$2||'%'",[f.org,unassigned])).rows[0].n,1);
+ await database().query('UPDATE users SET active=false WHERE id=$1',[admin.userId]);
+ assert.equal(await defaultWhatsAppLeadOwner(database(),f.org),otherUser);
+ await database().query('UPDATE users SET active=true WHERE id=$1',[admin.userId]);
+});
+
+test('varredura em lote suporta centenas de Leads e não cria ciclos duplicados',async()=>{
+ const f=await fixture();
+ await database().query(`INSERT INTO crm_records(organization_id,kind,owner_id,name,source,stage)
+  SELECT $1,'lead',$2,'Lead volume '||n,'Importação','new' FROM generate_series(1,300) n`,[f.org,admin.userId]);
+ const first=await refreshLeadRecoveryEnrollments(base),second=await refreshLeadRecoveryEnrollments(base);
+ assert.ok(first.scanned>=301);assert.equal(second.created,0);
+ assert.equal((await database().query('SELECT count(*)::int n FROM lead_recovery_enrollments WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0].n,1);
+});
 
 test('quatro etapas absolutas, template 3 reutilizado, cron concorrente e conclusão definitiva',async()=>{
  const f=await fixture();sends.length=0;await refreshLeadRecoveryEnrollments(base);await refreshLeadRecoveryEnrollments(base);
@@ -98,7 +128,7 @@ test('opt-in é registrado automaticamente só com evidência explícita e vende
  await explicitConsent(f,at(-1));assert.equal((await database().query('SELECT whatsapp_consent_status,consent_source FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0].whatsapp_consent_status,'opted_in');
  await database().query("UPDATE crm_records SET status='archived' WHERE id=$1",[f.lead]);assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,0);
  await database().query("UPDATE crm_records SET status='active' WHERE id=$1",[f.lead]);assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,1);
- const facts=await loadLeadFacts(database(),f.org);assert.equal(facts[0].owner_id,null);
+ const facts=await loadLeadFacts(database(),f.org);assert.equal(facts[0].owner_id,admin.userId);
  const before=(await database().query('SELECT count(*)::int n FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0].n;
  const sim=await simulateRecovery(f.actor,at(2));assert.equal(sim.summary.awaiting_customer,1);assert.equal(sim.summary.due_d2,1);assert.equal(sim.external_actions_executed,false);
  assert.equal((await database().query('SELECT count(*)::int n FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0].n,before);
@@ -278,6 +308,7 @@ test('resposta textual inequívoca ao último pedido concede; pausa global e ped
 test('indicador de mensagens enviadas respeita carteira do vendedor',async()=>{
  const f=await fixture();await pump(2);
  const seller={...f.actor,role:'seller'} as Actor;
+ await database().query('UPDATE crm_records SET owner_id=NULL WHERE id=$1',[f.lead]);
  const hidden=await recoveryDashboard(seller);assert.equal(hidden.total,0);assert.equal(hidden.metrics.sent,0);
  await database().query('UPDATE crm_records SET owner_id=$2 WHERE id=$1',[f.lead,seller.userId]);
  assert.equal((await recoveryDashboard(seller)).metrics.sent,1);

@@ -1,5 +1,6 @@
 import type {PoolClient} from 'pg';
 import {normalizeWhatsAppNumber} from './domain';
+import {defaultWhatsAppLeadOwner} from './lead-owner';
 
 type Db=Pick<PoolClient,'query'>;
 type Resolution={recordId:string|null;status:'identified'|'unidentified'|'ambiguous';source:'automatic'|'none';created:boolean};
@@ -55,13 +56,18 @@ export async function resolveWhatsAppRecord(db:Db,input:Input):Promise<Resolutio
   recordId=matches[0]??null;
   if(!recordId&&input.createIfMissing){
    const safeName=input.profileName.trim().length>=2?input.profileName.trim().slice(0,180):'Contato WhatsApp';
+   const ownerId=await defaultWhatsAppLeadOwner(db,input.organizationId);
    const inserted=await db.query<{id:string}>(`INSERT INTO crm_records(organization_id,kind,owner_id,name,phone,whatsapp,source,stage)
-    VALUES ($1,'lead',NULL,$2,$3,$3,'WhatsApp','new') RETURNING id`,[input.organizationId,safeName,input.waId]);
+    VALUES ($1,'lead',$4,$2,$3,$3,'WhatsApp','new') RETURNING id`,[input.organizationId,safeName,input.waId,ownerId]);
    recordId=inserted.rows[0].id;created=true;
    await db.query(`INSERT INTO crm_activities(organization_id,record_id,actor_id,action,detail)
     VALUES ($1,$2,$3,'whatsapp.lead.created','Lead criado automaticamente após mensagem inbound do WhatsApp.')`,[input.organizationId,recordId,input.actorId]);
    await db.query(`INSERT INTO audit_logs(organization_id,actor_id,action,detail)
     VALUES ($1,$2,'whatsapp.lead.created','Lead criado automaticamente e vinculado por identidade WhatsApp.')`,[input.organizationId,input.actorId]);
+   if(ownerId){
+    await db.query(`INSERT INTO crm_activities(organization_id,record_id,actor_id,action,detail) VALUES ($1,$2,$3,'whatsapp.owner_assigned','Responsável padrão atribuído automaticamente ao Lead originado pelo WhatsApp.')`,[input.organizationId,recordId,ownerId]);
+    await db.query(`INSERT INTO audit_logs(organization_id,actor_id,action,detail) VALUES ($1,$2,'whatsapp.owner_assigned',$3)`,[input.organizationId,ownerId,`Responsável padrão atribuído automaticamente; origem=WhatsApp; lead_id=${recordId}.`]);
+   }
   }
  }
  if(!recordId)return {recordId:null,status:'unidentified',source:'none',created:false};

@@ -7,7 +7,7 @@ import {normalizeWhatsAppNumber} from '@/modules/whatsapp/domain';
 type Db=Pick<PoolClient,'query'>;
 export type RecoveryConfig={
  organization_id:string;enabled:boolean;include_uncontacted:boolean;timezone:string;business_hours:Record<string,unknown>;
- lead_stages:string[];seller_ids:string[];version:number;updated_by:string;
+ lead_stages:string[];seller_ids:string[];default_owner_id:string|null;version:number;updated_by:string;
 };
 export type RecoveryStep={id:string;position:number;delay_days:number;template_id:string;header_parameters:string[];body_parameters:string[];template_name:string;template_language:string;template_status:string;supported:boolean};
 export type LeadFact={
@@ -85,7 +85,7 @@ export function assessLead(fact:LeadFact,config:RecoveryConfig,steps:RecoverySte
  else if(fact.consent_status!=='opted_in'||!fact.consent_source.trim())reason='consent_required';
  else if(['won','lost'].includes(fact.stage)||fact.has_won_opportunity||fact.has_lost_opportunity)reason='negotiation_concluded';
  else if(!config.lead_stages.includes(fact.stage))reason='stage_excluded';
- else if(config.seller_ids.length&&(!fact.owner_id||!config.seller_ids.includes(fact.owner_id)))reason='seller_excluded';
+ else if(config.seller_ids.length&&(!fact.owner_id||!config.seller_ids.includes(fact.owner_id)&&fact.owner_id!==config.default_owner_id))reason='seller_excluded';
  else if(!fact.owner_active)reason='owner_inactive';
  else if(!normalized.valid)reason='invalid_phone';
  else if(!fact.conversation_id||conversation.digits!==normalized.digits)reason='conversation_conflict';

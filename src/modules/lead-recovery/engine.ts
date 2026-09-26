@@ -6,6 +6,7 @@ import type {MetaFetcher} from '@/modules/whatsapp/meta';
 import {assessLead,loadLeadFacts,loadRecoveryConfig,type LeadFact,type RecoveryStep} from './eligibility';
 import {nextRecoveryWindow,recoveryDueAt,recoveryEligibleAt,recoveryIsOpen,recoveryTimezone} from './schedule';
 import {reconcileHistoricalWhatsAppOptIns} from '@/modules/whatsapp/marketing-consent';
+import {assignUnownedWhatsAppLeads} from '@/modules/whatsapp/lead-owner';
 
 type Db=Pick<PoolClient,'query'>;
 type Attempt={id:string;organization_id:string;enrollment_id:string;step_position:number;template_id:string;client_request_id:string;attempts:number};
@@ -28,31 +29,39 @@ async function insertAttempt(db:Db,org:string,e:Enrollment,step:RecoveryStep,hou
  await db.query('UPDATE lead_recovery_enrollments SET next_attempt_at=$3,updated_at=now() WHERE organization_id=$1 AND id=$2',[org,e.id,scheduled]);
 }
 export async function refreshLeadRecoveryEnrollments(now=new Date()){
- const organizations=await database().query<{organization_id:string}>("SELECT organization_id FROM organization_lead_recovery_settings WHERE enabled");let created=0,cancelled=0;
- for(const {organization_id:org} of organizations.rows){await transaction(async db=>{await lockRecoveryOrganization(db,org);await reconcileHistoricalWhatsAppOptIns(db,org);});let afterId:string|undefined;
-  for(;;){const batch=await loadLeadFacts(database(),org,undefined,100,undefined,afterId,now);if(!batch.length)break;
-   for(const candidate of batch)await transaction(async db=>{
-    await lockRecoveryOrganization(db,org);
-    const loaded=await loadRecoveryConfig(db,org);if(!loaded?.settings.enabled||!loaded.steps.length)return;
-    const fact=(await loadLeadFacts(db,org,undefined,1,candidate.id,undefined,now))[0];if(!fact)return;
-    if(fact.conversation_id)await db.query('SELECT id FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2 FOR UPDATE',[org,fact.conversation_id]);
-    const active=(await db.query<Enrollment>("SELECT * FROM lead_recovery_enrollments WHERE organization_id=$1 AND record_id=$2 AND status IN ('scheduled','paused') FOR UPDATE",[org,fact.id])).rows[0];
+ const organizations=await database().query<{organization_id:string}>("SELECT organization_id FROM organization_lead_recovery_settings WHERE enabled ORDER BY organization_id");
+ const metrics={organizations:organizations.rowCount,scanned:0,created:0,cancelled:0,blockedConsent:0,blockedSeller:0,otherBlocked:0,ownersAssigned:0,ownersUnresolved:0};
+ for(const {organization_id:org} of organizations.rows)await transaction(async db=>{
+  await lockRecoveryOrganization(db,org);
+  await reconcileHistoricalWhatsAppOptIns(db,org);
+  const owners=await assignUnownedWhatsAppLeads(db,org);metrics.ownersAssigned+=owners.assigned;metrics.ownersUnresolved+=owners.unresolved;
+  const loaded=await loadRecoveryConfig(db,org);if(!loaded?.settings.enabled||!loaded.steps.length)return;
+  const snapshot:Snapshot={steps:loaded.steps,business_hours:loaded.settings.business_hours,timezone:recoveryTimezone};
+  let afterId:string|undefined;
+  for(;;){
+   const batch=await loadLeadFacts(db,org,undefined,100,undefined,afterId,now);if(!batch.length)break;
+   metrics.scanned+=batch.length;
+   for(const fact of batch){
     const assessment=assessLead(cleanFact(fact),loaded.settings,loaded.steps,now);
+    if(assessment.reason==='consent_required')metrics.blockedConsent++;
+    else if(assessment.reason==='seller_excluded'||assessment.reason==='owner_inactive')metrics.blockedSeller++;
+    else if(!assessment.eligible)metrics.otherBlocked++;
+    const active=fact.enrollment_id&&['scheduled','paused'].includes(fact.enrollment_status??'')?{
+     id:fact.enrollment_id,status:fact.enrollment_status!,anchor_message_id:fact.enrollment_anchor_message_id,
+    }:null;
     if(active){
-     if(!assessment.eligible){await cancelCycle(db,org,active.id,assessment.reason);cancelled++;return;}
-     if(active.anchor_message_id===fact.anchor_message_id)return;
-     if(active.status==='paused')return;
-     await cancelCycle(db,org,active.id,'new_company_outbound');cancelled++;
+     if(!assessment.eligible){await cancelCycle(db,org,active.id,assessment.reason);metrics.cancelled++;continue;}
+     if(active.anchor_message_id===fact.anchor_message_id||active.status==='paused')continue;
+     await cancelCycle(db,org,active.id,'new_company_outbound');metrics.cancelled++;
     }
-    if(!assessment.eligible||!fact.anchor_message_id||!fact.conversation_id||!assessment.inactivity_anchor)return;
-    const snapshot:Snapshot={steps:loaded.steps,business_hours:loaded.settings.business_hours,timezone:recoveryTimezone};
-    const inserted=await db.query<Enrollment>(`INSERT INTO lead_recovery_enrollments(organization_id,record_id,conversation_id,owner_id,classification,inactivity_anchor,anchor_message_id,sequence_snapshot,created_by,updated_by) VALUES ($1,$2,$3,$4,'awaiting_reply',$5,$6,$7,$8,$8) ON CONFLICT DO NOTHING RETURNING *`,[org,fact.id,fact.conversation_id,fact.owner_id??loaded.settings.updated_by,assessment.inactivity_anchor,fact.anchor_message_id,JSON.stringify(snapshot),loaded.settings.updated_by]);
-    if(inserted.rows[0]){await insertAttempt(db,org,inserted.rows[0],loaded.steps[0],snapshot.business_hours);created++;}
-   });
+    if(!assessment.eligible||!fact.anchor_message_id||!fact.conversation_id||!assessment.inactivity_anchor)continue;
+    const inserted=await db.query<Enrollment>(`INSERT INTO lead_recovery_enrollments(organization_id,record_id,conversation_id,owner_id,classification,inactivity_anchor,anchor_message_id,sequence_snapshot,created_by,updated_by) VALUES ($1,$2,$3,$4,'awaiting_reply',$5,$6,$7,$8,$8) ON CONFLICT DO NOTHING RETURNING *`,[org,fact.id,fact.conversation_id,fact.owner_id??loaded.settings.default_owner_id??loaded.settings.updated_by,assessment.inactivity_anchor,fact.anchor_message_id,JSON.stringify(snapshot),loaded.settings.updated_by]);
+    if(inserted.rows[0]){await insertAttempt(db,org,inserted.rows[0],loaded.steps[0],snapshot.business_hours);metrics.created++;}
+   }
    afterId=batch.at(-1)!.id;if(batch.length<100)break;
   }
- }
- return {organizations:organizations.rowCount,created,cancelled};
+ });
+ return metrics;
 }
 async function deferAttempt(db:Db,a:Attempt,date:Date,reason:string){
  await db.query("UPDATE lead_recovery_attempts SET status='pending',locked_at=NULL,scheduled_for=$3,safe_error=$4,updated_at=now() WHERE organization_id=$1 AND id=$2 AND status='processing'",[a.organization_id,a.id,date,reason]);
@@ -112,7 +121,7 @@ export async function processLeadRecoveryAttempts(limit=20,fetcher?:MetaFetcher,
  let sent=0;for(const a of jobs){try{const p=await prepareAttempt(a,now);if(!p)continue;const parameters={header:parse<string[]>(p.step.header_parameters).map(v=>render(v,p.fact,p.actor)),body:parse<string[]>(p.step.body_parameters).map(v=>render(v,p.fact,p.actor))};const message=await sendWhatsAppRecoveryTemplate(p.actor,p.conversationId,{client_request_id:a.client_request_id,template_id:a.template_id,parameters},{attemptId:a.id,now},fetcher);if(message.outcome_uncertain||!['sent','delivered','read'].includes(message.delivery_status))throw new Error('lead_recovery_uncertain');await finishSent(a,message.id,now);sent++;}catch(error){await failAttempt(a,error,now);}}
  return {processed:jobs.length,sent};
 }
-export async function runLeadRecoveryScheduler(){await refreshLeadRecoveryEnrollments();return processLeadRecoveryAttempts();}
+export async function runLeadRecoveryScheduler(){const refresh=await refreshLeadRecoveryEnrollments(),attempts=await processLeadRecoveryAttempts();return {refresh,attempts};}
 
 async function actorFor(db:Db,organizationId:string,userId:string):Promise<Actor>{const result=await db.query(`SELECT u.id user_id,u.name,u.email,o.name organization_name,o.slug organization_slug,m.role_code role,r.name role_name,COALESCE(array_agg(rp.permission_code) FILTER(WHERE rp.permission_code IS NOT NULL),'{}') permissions FROM memberships m JOIN users u ON u.id=m.user_id JOIN organizations o ON o.id=m.organization_id JOIN roles r ON r.code=m.role_code LEFT JOIN role_permissions rp ON rp.role_code=m.role_code WHERE m.organization_id=$1 AND m.user_id=$2 AND m.active AND u.active GROUP BY u.id,u.name,u.email,o.name,o.slug,m.role_code,r.name`,[organizationId,userId]);const row=result.rows[0];if(!row)throw new Error('lead_recovery_actor_unavailable');return {userId:row.user_id,organizationId,name:row.name,email:row.email,organizationName:row.organization_name,organizationSlug:row.organization_slug,role:row.role,roleName:row.role_name,permissions:row.permissions};}
 

@@ -16,6 +16,7 @@ export const recoverySettingsInput=z.object({
  business_hours:businessHoursSchema.refine(hours=>Object.values(hours).some(day=>day.enabled),'Selecione pelo menos um dia.').refine(hours=>Object.values(hours).every(day=>day.start==='10:00'&&day.end==='14:00'),'Use a janela das 10h às 14h.'),
  lead_stages:z.array(leadStage).min(1).max(18),
  seller_ids:z.array(z.uuid()).max(200),
+ default_owner_id:z.uuid(),
  steps:z.array(recoveryStep).min(1).max(4).superRefine((steps,ctx)=>{
   const positions=steps.map(step=>step.position);
   if(new Set(positions).size!==positions.length)ctx.addIssue({code:'custom',message:'As posições das tentativas não podem se repetir.'});

@@ -1,4 +1,5 @@
 import type {PoolClient} from 'pg';
+import {defaultWhatsAppLeadOwner} from './lead-owner';
 import {emitAutomationEvent} from '@/modules/automations/events';
 import {emptyNormalizedFlow,type NormalizedFlowSubmission} from './flow-domain';
 import {setWhatsAppIdentity} from './contact-identity';
@@ -48,10 +49,14 @@ export async function processFlowSubmission(db:Db,input:Input){
   else matches=(await db.query<RecordMatch>(`SELECT id,kind FROM crm_records WHERE organization_id=$1 AND deleted_at IS NULL AND $2 IN (crm_normalize_whatsapp_number(phone),crm_normalize_whatsapp_number(whatsapp)) ORDER BY id LIMIT 2 FOR UPDATE`,[input.organizationId,input.waId])).rows;
   if(matches.length>1)result='ambiguous_contact';
   else if(!matches.length){
-   const detail=details(flow,normalized);
-   const created=await db.query<{id:string}>(`INSERT INTO crm_records(organization_id,owner_id,kind,name,phone,whatsapp,city,state,source,stage,property_type,financing_interest,battery_interest,observations) VALUES ($1,NULL,'lead',$2,$3,$3,$4,$5,'WhatsApp Flow','new',$6,$7,$8,$9) RETURNING id`,[input.organizationId,normalized.name,input.waId,normalized.city,normalized.state,normalized.property_type,normalized.commercial_interest==='Financiar o sistema',normalized.commercial_interest==='Sistema com baterias',detail]);
+   const detail=details(flow,normalized),ownerId=await defaultWhatsAppLeadOwner(db,input.organizationId);
+   const created=await db.query<{id:string}>(`INSERT INTO crm_records(organization_id,owner_id,kind,name,phone,whatsapp,city,state,source,stage,property_type,financing_interest,battery_interest,observations) VALUES ($1,$10,'lead',$2,$3,$3,$4,$5,'WhatsApp Flow','new',$6,$7,$8,$9) RETURNING id`,[input.organizationId,normalized.name,input.waId,normalized.city,normalized.state,normalized.property_type,normalized.commercial_interest==='Financiar o sistema',normalized.commercial_interest==='Sistema com baterias',detail,ownerId]);
    recordId=created.rows[0].id;result='lead_created';
-   await emitAutomationEvent(db,{organizationId:input.organizationId,type:'lead.created',eventId:`flow:${input.providerSubmissionId}:lead`,entityType:'record',entityId:recordId,recordId,payload:{owner_id:null,stage:'new',source:'WhatsApp Flow'}});
+   if(ownerId){
+    await db.query(`INSERT INTO crm_activities(organization_id,record_id,actor_id,action,detail) VALUES ($1,$2,$3,'whatsapp.owner_assigned','Responsável padrão atribuído automaticamente ao Lead originado pelo WhatsApp.')`,[input.organizationId,recordId,ownerId]);
+    await db.query(`INSERT INTO audit_logs(organization_id,actor_id,action,detail) VALUES ($1,$2,'whatsapp.owner_assigned',$3)`,[input.organizationId,ownerId,`Responsável padrão atribuído automaticamente; origem=WhatsApp Flow; lead_id=${recordId}.`]);
+   }
+   await emitAutomationEvent(db,{organizationId:input.organizationId,type:'lead.created',eventId:`flow:${input.providerSubmissionId}:lead`,entityType:'record',entityId:recordId,recordId,payload:{owner_id:ownerId,stage:'new',source:'WhatsApp Flow'}});
   }else{
    recordId=matches[0].id;
    if(matches[0].kind==='lead'){
