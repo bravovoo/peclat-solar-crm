@@ -41,3 +41,11 @@ O painel **Recuperação de Leads** oferece indicadores, filtros, simulação se
 - O contato iniciado pelo cliente é registrado como atendimento pelo WhatsApp, separado do consentimento para marketing. A recuperação continua bloqueada até existir `opted_in` com origem registrada.
 - A migration `034_whatsapp_contact_identity.sql` corrige conversas inbound antigas: reutiliza somente correspondências fortes, marca ambiguidades e cria Lead apenas quando não existe candidato.
 - Formatações com espaços, parênteses, hífens, `+55` ou número nacional usam a mesma forma canônica. Alterações inferidas de nono dígito não são feitas automaticamente.
+
+### Ciclos de inatividade e janela de envio
+
+A migration `035_lead_recovery_cycles.sql` vincula cada ciclo à mensagem outbound que iniciou a espera e registra snapshot imutável da sequência e dos horários. A varredura automática considera o histórico real da conversa: inbound mais recente significa atendimento aguardando a empresa; outbound humana ou de automação normal inicia a contagem. Mensagens da própria recuperação não reiniciam o relógio.
+
+A sequência é absoluta desde a mensagem-base: D+2 usa `peclat_recuperacao_lead_1`, D+5 usa `peclat_recuperacao_lead_2`, D+7 usa `peclat_recuperacao_lead_3` e D+10 usa novamente `peclat_recuperacao_lead_3`. A posição da etapa participa da idempotência e o ciclo termina após a quarta tentativa. Os envios só ocorrem entre 10h e 14h em `America/Sao_Paulo`, nos dias habilitados; vencimentos fora da janela ficam pendentes para o próximo horário permitido sem consumir tentativa.
+
+Antes de cada envio, o Worker revalida consentimento, contato, telefone, conversa, mensagem-base, modelo aprovado, configuração, controles globais e ausência de resposta. O webhook e a fila seguem a mesma ordem de bloqueios para uma resposta concorrente cancelar etapas futuras. Uma nova mensagem normal da empresa pode iniciar outro ciclo; resposta do cliente encerra o ciclo atual e mantém o histórico. Tentativas registram marco, elegibilidade, etapa, fuso, modelo, resultado, ID da Meta e motivo seguro.

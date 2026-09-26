@@ -5,13 +5,15 @@ import {serviceWindow,whatsappMediaSendInput,whatsappTemplateSendInput,whatsappT
 import {assertWhatsAppConversation} from './inbox';
 import {fetchMetaTemplates,metaConfiguration,MetaSendError,sendMetaMessage,uploadMetaMedia,type MetaFetcher,type MetaTemplate} from './meta';
 import {prepareWhatsAppMedia} from './media';
+import {assessLead,loadLeadFacts,loadRecoveryConfig} from '@/modules/lead-recovery/eligibility';
+import {recoveryEligibleAt,recoveryIsOpen} from '@/modules/lead-recovery/schedule';
 
 type Db=Pick<PoolClient,'query'>;
 type Integration={status:string;api_version:string;phone_number_id:string;business_account_id:string};
 type TemplateRow={id:string;meta_template_id:string;name:string;language:string;category:string;status:string;components:unknown[];supported:boolean;unsupported_reason:string;synced_at:string};
 type OutboundRow={id:string;conversation_id:string;message_type:string;text_body:string;template_id:string|null;template_parameters:unknown;delivery_status:string;outcome_uncertain:boolean;meta_message_id:string|null;filename:string;caption:string;safe_metadata:Record<string,unknown>};
 export type AutomationOutboundContext={runId:string;actionIndex:number};
-export type RecoveryOutboundContext={attemptId:string};
+export type RecoveryOutboundContext={attemptId:string;now?:Date};
 async function assertAutomationEligible(db:Db,actor:Actor,conversationId:string,automation:AutomationOutboundContext,conversation:{automations_paused?:boolean;automation_blocked?:boolean}){
  if(conversation.automations_paused)throw new Error('automation_conversation_paused');
  if(conversation.automation_blocked)throw new Error('automation_contact_opt_out');
@@ -28,15 +30,25 @@ async function assertAutomationEligible(db:Db,actor:Actor,conversationId:string,
 async function assertRecoveryEligible(db:Db,actor:Actor,conversationId:string,recovery:RecoveryOutboundContext,conversation:{automations_paused?:boolean;automation_blocked?:boolean}){
  if(conversation.automations_paused)throw new Error('lead_recovery_conversation_paused');
  if(conversation.automation_blocked)throw new Error('lead_recovery_contact_opt_out');
- const attempt=await db.query<{status:string;enrollment_status:string;enabled:boolean;consent_status:string}>(`SELECT a.status,e.status enrollment_status,s.enabled,COALESCE(p.whatsapp_consent_status,'unknown') consent_status
+ const attempt=await db.query<{status:string;enrollment_status:string;enabled:boolean;consent_status:string;record_id:string;anchor_message_id:string;inactivity_anchor:string;day_offset:number;template_id:string;sequence_snapshot:{steps:{position:number;template_id:string;template_name:string;template_language:string}[]};step_position:number}>(`SELECT a.status,a.day_offset,a.step_position,a.template_id,e.record_id,e.anchor_message_id,e.inactivity_anchor,e.sequence_snapshot,e.status enrollment_status,s.enabled,COALESCE(p.whatsapp_consent_status,'unknown') consent_status
   FROM lead_recovery_attempts a JOIN lead_recovery_enrollments e ON e.organization_id=a.organization_id AND e.id=a.enrollment_id
   JOIN organization_lead_recovery_settings s ON s.organization_id=e.organization_id
   JOIN crm_records r ON r.organization_id=e.organization_id AND r.id=e.record_id
   LEFT JOIN crm_contact_preferences p ON p.organization_id=r.organization_id AND p.record_id=r.id
   WHERE a.organization_id=$1 AND a.id=$2 AND e.conversation_id=$3 FOR UPDATE OF a,e`,[actor.organizationId,recovery.attemptId,conversationId]);
  const row=attempt.rows[0];if(!row||row.status!=='processing'||row.enrollment_status!=='scheduled'||!row.enabled||row.consent_status!=='opted_in')throw new Error('lead_recovery_not_eligible');
- const global=await db.query<{whatsapp_outbound_enabled:boolean}>('SELECT whatsapp_outbound_enabled FROM organization_automation_settings WHERE organization_id=$1',[actor.organizationId]);
+ const global=await db.query<{whatsapp_outbound_enabled:boolean}>('SELECT whatsapp_outbound_enabled FROM organization_automation_settings WHERE organization_id=$1 FOR SHARE',[actor.organizationId]);
  if(!global.rows[0]?.whatsapp_outbound_enabled)throw new Error('automation_outbound_kill_switch');
+ await db.query('SELECT organization_id FROM organization_lead_recovery_settings WHERE organization_id=$1 FOR SHARE',[actor.organizationId]);
+ const now=recovery.now??new Date(),loaded=await loadRecoveryConfig(db,actor.organizationId);
+ const fact=(await loadLeadFacts(db,actor.organizationId,undefined,1,row.record_id,undefined,now))[0];
+ if(!fact||!loaded)throw new Error('lead_recovery_record_unavailable');
+ const assessment=assessLead({...fact,enrollment_status:null},loaded.settings,loaded.steps,now);
+ if(!assessment.eligible||fact.conversation_id!==conversationId||fact.anchor_message_id!==row.anchor_message_id)throw new Error('lead_recovery_conversation_changed');
+ if(!row.day_offset||now<recoveryEligibleAt(row.inactivity_anchor,row.day_offset)||!recoveryIsOpen(loaded.settings.business_hours,now))throw new Error('lead_recovery_outside_business_hours');
+ const step=row.sequence_snapshot?.steps?.find(s=>s.position===row.step_position);
+ const template=(await db.query('SELECT name,language,status,supported FROM whatsapp_templates WHERE organization_id=$1 AND id=$2',[actor.organizationId,row.template_id])).rows[0];
+ if(!step||!template||step.template_id!==row.template_id||step.template_name!==template.name||step.template_language!==template.language||template.status!=='APPROVED'||!template.supported)throw new Error('lead_recovery_template_unavailable');
 }
 const object=(value:unknown)=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
 const array=(value:unknown)=>Array.isArray(value)?value:[];
@@ -81,10 +93,27 @@ async function reserveTemplate(actor:Actor,conversationId:string,input:unknown,a
   return {messageId,recipient:conversation.external_wa_id,config:metaConfiguration(currentIntegration),payload:{messaging_product:'whatsapp',to:conversation.external_wa_id,type:'template',template:{name:template.name,language:{code:template.language},...(components.length?{components}:{})}}};
  });
 }
-async function finish(actor:Actor,reservation:Reservation,fetcher?:MetaFetcher){if(reservation.existing)return reservation.existing;if(reservation.blocked)throw new AccessError(409,'Janela de atendimento encerrada. Utilize um modelo aprovado pelo WhatsApp.');if(!reservation.messageId||!reservation.config||!reservation.payload)throw new AccessError(503,'Não foi possível preparar o envio.');let accepted=false;try{const sent=await sendMetaMessage(reservation.config,reservation.payload,fetcher);accepted=true;await transaction(async db=>{await db.query(`UPDATE whatsapp_messages SET meta_message_id=$3,delivery_status='sent',sent_at=now(),outcome_uncertain=false WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,sent.wamid]);const message=await db.query<{conversation_id:string;text_body:string;message_type:string}>(`SELECT conversation_id,text_body,message_type FROM whatsapp_messages WHERE organization_id=$1 AND id=$2`,[actor.organizationId,reservation.messageId]);if(message.rowCount)await db.query(`UPDATE whatsapp_conversations SET last_message_preview=$3,last_message_type=$4,last_message_at=now(),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[actor.organizationId,message.rows[0].conversation_id,message.rows[0].text_body.slice(0,500),message.rows[0].message_type]);});}catch(error){if(error instanceof MetaSendError){if(error.kind==='rejected')await database().query(`UPDATE whatsapp_messages SET delivery_status='failed',failed_at=now(),failure_code=$3,failure_title=$4,failure_detail=$5 WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,error.safeCode,error.safeTitle,error.safeDetail]);else await database().query(`UPDATE whatsapp_messages SET outcome_uncertain=true,failure_code=$3,failure_title=$4,failure_detail=$5 WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,error.safeCode,error.safeTitle,error.safeDetail]);throw new AccessError(502,error.kind==='uncertain'?'O resultado do envio não pôde ser confirmado. Não reenvie automaticamente.':'Não foi possível enviar a mensagem pelo WhatsApp.');}if(accepted){await database().query(`UPDATE whatsapp_messages SET outcome_uncertain=true,failure_code='local_persist_failed',failure_title='Confirmação local pendente',failure_detail='A Meta aceitou o envio, mas o estado local não foi confirmado.' WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId]).catch(()=>undefined);throw new AccessError(502,'A Meta aceitou o envio, mas a confirmação local falhou. Não reenvie automaticamente.');}throw error;}return (await database().query<OutboundRow>('SELECT id,conversation_id,text_body,template_id,template_parameters,delivery_status,outcome_uncertain,meta_message_id FROM whatsapp_messages WHERE organization_id=$1 AND id=$2',[actor.organizationId,reservation.messageId])).rows[0];}
+async function finish(actor:Actor,reservation:Reservation,fetcher?:MetaFetcher,guard?:(send:()=>ReturnType<typeof sendMetaMessage>)=>ReturnType<typeof sendMetaMessage>){if(reservation.existing)return reservation.existing;if(reservation.blocked)throw new AccessError(409,'Janela de atendimento encerrada. Utilize um modelo aprovado pelo WhatsApp.');if(!reservation.messageId||!reservation.config||!reservation.payload)throw new AccessError(503,'Não foi possível preparar o envio.');let accepted=false;try{const send=()=>sendMetaMessage(reservation.config!,reservation.payload!,fetcher);const sent=await (guard?guard(send):send());accepted=true;await transaction(async db=>{await db.query(`UPDATE whatsapp_messages SET meta_message_id=$3,delivery_status='sent',sent_at=now(),outcome_uncertain=false WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,sent.wamid]);const message=await db.query<{conversation_id:string;text_body:string;message_type:string}>(`SELECT conversation_id,text_body,message_type FROM whatsapp_messages WHERE organization_id=$1 AND id=$2`,[actor.organizationId,reservation.messageId]);if(message.rowCount)await db.query(`UPDATE whatsapp_conversations SET last_message_preview=$3,last_message_type=$4,last_message_at=now(),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[actor.organizationId,message.rows[0].conversation_id,message.rows[0].text_body.slice(0,500),message.rows[0].message_type]);});}catch(error){if(error instanceof MetaSendError){if(error.kind==='rejected')await database().query(`UPDATE whatsapp_messages SET delivery_status='failed',failed_at=now(),failure_code=$3,failure_title=$4,failure_detail=$5 WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,error.safeCode,error.safeTitle,error.safeDetail]);else await database().query(`UPDATE whatsapp_messages SET outcome_uncertain=true,failure_code=$3,failure_title=$4,failure_detail=$5 WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId,error.safeCode,error.safeTitle,error.safeDetail]);throw new AccessError(502,error.kind==='uncertain'?'O resultado do envio não pôde ser confirmado. Não reenvie automaticamente.':'Não foi possível enviar a mensagem pelo WhatsApp.');}if(accepted){await database().query(`UPDATE whatsapp_messages SET outcome_uncertain=true,failure_code='local_persist_failed',failure_title='Confirmação local pendente',failure_detail='A Meta aceitou o envio, mas o estado local não foi confirmado.' WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'`,[actor.organizationId,reservation.messageId]).catch(()=>undefined);throw new AccessError(502,'A Meta aceitou o envio, mas a confirmação local falhou. Não reenvie automaticamente.');}throw error;}return (await database().query<OutboundRow>('SELECT id,conversation_id,text_body,template_id,template_parameters,delivery_status,outcome_uncertain,meta_message_id FROM whatsapp_messages WHERE organization_id=$1 AND id=$2',[actor.organizationId,reservation.messageId])).rows[0];}
 export async function sendWhatsAppText(actor:Actor,conversationId:string,input:unknown,fetcher?:MetaFetcher,automation?:AutomationOutboundContext){access(actor);return finish(actor,await reserveText(actor,conversationId,input,automation),fetcher);}
 export async function sendWhatsAppTemplate(actor:Actor,conversationId:string,input:unknown,fetcher?:MetaFetcher,automation?:AutomationOutboundContext){access(actor);return finish(actor,await reserveTemplate(actor,conversationId,input,automation),fetcher);}
-export async function sendWhatsAppRecoveryTemplate(actor:Actor,conversationId:string,input:unknown,recovery:RecoveryOutboundContext,fetcher?:MetaFetcher){access(actor);return finish(actor,await reserveTemplate(actor,conversationId,input,undefined,recovery),fetcher);}
+export async function sendWhatsAppRecoveryTemplate(actor:Actor,conversationId:string,input:unknown,recovery:RecoveryOutboundContext,fetcher?:MetaFetcher){
+ access(actor);const reservation=await reserveTemplate(actor,conversationId,input,undefined,recovery);
+ return finish(actor,reservation,fetcher,async send=>{
+  let checked=false;
+  try{return await transaction(async db=>{
+   await integration(actor,db,true);
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[actor.organizationId]);
+   const conversation=await assertWhatsAppConversation(actor,conversationId,db,true);
+   await assertRecoveryEligible(db,actor,conversationId,recovery,conversation);checked=true;
+   // Locks serialize inbound processing through the final provider call. An inbound
+   // arriving after dispatch cannot recall a message already accepted by Meta.
+   return send();
+  });}catch(error){
+   if(!checked&&reservation.messageId)await database().query("UPDATE whatsapp_messages SET delivery_status='failed',failure_code='lead_recovery_gate_changed',failure_title='Envio cancelado na revalidação',failed_at=now() WHERE organization_id=$1 AND id=$2 AND delivery_status='pending'",[actor.organizationId,reservation.messageId]);
+   throw error;
+  }
+ });
+}
 export async function sendWhatsAppMedia(actor:Actor,conversationId:string,input:unknown,file:File,fetcher?:MetaFetcher){
  access(actor);const data=whatsappMediaSendInput.parse(input),media=await prepareWhatsAppMedia(file,data.caption);
  await assertWhatsAppConversation(actor,conversationId);
