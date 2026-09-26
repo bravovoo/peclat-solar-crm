@@ -20,6 +20,9 @@ test('admin cria, simula, ativa e desativa regra sem executar ação externa',as
  await page.getByLabel('Nome',{exact:true}).fill('Atendimento E2E');
  await page.getByLabel('Condição').selectOption('new_whatsapp_conversation');
  await expect(page.getByText(/primeiro contato real, sem qualquer outro histórico/)).toBeVisible();
+ await page.getByLabel('Ação',{exact:true}).selectOption('send_whatsapp_welcome_consent');
+ await expect(page.locator('.automation-preview')).toContainText(/enviar boas-vindas com autorização/i);
+ await page.getByLabel('Ação',{exact:true}).selectOption('create_task');
  await page.getByLabel('Quando').selectOption('lead.created');
  await expect(page.getByLabel('Condição')).toHaveValue('none');
  await page.getByLabel('Título da tarefa').fill('Revisar novo Lead E2E');

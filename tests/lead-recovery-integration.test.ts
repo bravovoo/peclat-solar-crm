@@ -14,7 +14,7 @@ import {saveRecoverySettings,saveRecoveryConsent,simulateRecovery,operateRecover
 import {refreshLeadRecoveryEnrollments,processLeadRecoveryAttempts} from '../src/modules/lead-recovery/engine';
 import {receiveMetaWebhook} from '../src/modules/whatsapp/webhook';
 import {processAutomaticConsentRequests} from '../src/modules/whatsapp/consent-request';
-import {automaticConsentPrompt} from '../src/modules/whatsapp/marketing-consent';
+import {automaticConsentPrompt,initialWelcomeConsentPrompt} from '../src/modules/whatsapp/marketing-consent';
 import {assignUnownedWhatsAppLeads,defaultWhatsAppLeadOwner} from '../src/modules/whatsapp/lead-owner';
 import {loadLeadFacts,assessLead,loadRecoveryConfig} from '../src/modules/lead-recovery/eligibility';
 let server:EmbeddedPostgres,admin:Actor;let n=0;
@@ -268,6 +268,16 @@ test('pedido automático é único, contextual, dentro da janela e não inicia D
   assert.equal((await processLeadRecoveryAttempts(20,templateMeta,new Date(due))).sent,1);
  }
  assert.deepEqual(templateSends,['peclat_recuperacao_lead_1','peclat_recuperacao_lead_2','peclat_recuperacao_lead_3','peclat_recuperacao_lead_3']);
+});
+
+test('boas-vindas unificadas impedem segundo pedido, registram o aceite e não viram âncora D+2',async()=>{
+ const f=await fixture(false);await inbound(f,at(1));const companyMessage=await outbound(f,new Date(at(1).getTime()+30000)),promptId=`wamid.initial.${crypto.randomUUID()}`,now=new Date(at(1).getTime()+60000);
+ await database().query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,meta_timestamp,processing_status,sent_by,client_request_id,delivery_status,origin,safe_metadata) VALUES ($1,$2,$3,'outbound','interactive',$4,'',$5,'processed',$6,$7,'sent','manual',$8::jsonb)`,[f.org,f.conversation,promptId,initialWelcomeConsentPrompt,now,admin.userId,crypto.randomUUID(),JSON.stringify({system_purpose:'consent_request',request_state:'initial_automation'})]);
+ let sends=0;const meta:typeof fetch=async()=>{sends++;return new Response(JSON.stringify({messages:[{id:'wamid.unexpected'}]}),{status:200});};
+ assert.equal((await processAutomaticConsentRequests(20,meta,new Date(now.getTime()+60000),f.org)).sent,0);assert.equal(sends,0);
+ assert.equal((await loadLeadFacts(database(),f.org))[0].anchor_message_id,companyMessage);
+ await buttonReply(f,new Date(now.getTime()+120000),'Sim, autorizo',promptId);
+ assert.equal((await database().query('SELECT whatsapp_consent_status FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0].whatsapp_consent_status,'opted_in');
 });
 
 test('resposta negativa bloqueia, ambígua não concede e opt-in existente não pergunta',async()=>{

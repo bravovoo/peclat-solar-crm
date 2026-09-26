@@ -50,6 +50,7 @@ const action=z.discriminatedUnion('type',[
  actionBase.extend({type:z.literal('add_tag'),tag_id:uuid}).strict(),
  actionBase.extend({type:z.literal('remove_tag'),tag_id:uuid}).strict(),
  actionBase.extend({type:z.literal('send_whatsapp_message'),text:safeText(4096).min(1)}).strict(),
+ actionBase.extend({type:z.literal('send_whatsapp_welcome_consent')}).strict(),
  actionBase.extend({type:z.literal('send_whatsapp_template'),template_id:uuid,header:z.array(safeText(1024).min(1)).max(20).default([]),body:z.array(safeText(1024).min(1)).max(50).default([])}).strict(),
  actionBase.extend({type:z.literal('mark_for_follow_up'),title:safeText(180).min(2),delay_minutes:z.number().int().min(1).max(525600),owner_mode:ownerMode.default('event_owner'),owner_id:uuid.nullable().default(null),team_id:uuid.nullable().default(null)}).strict(),
 ]);
@@ -64,6 +65,7 @@ export const automationRuleInput=z.object({
 }).strict().superRefine((value,context)=>{
   if(value.conditions.all.some(item=>item.type==='elapsed_minutes')&&!['no_reply_for_duration','follow_up_due'].includes(value.trigger_type))context.addIssue({code:'custom',message:'Tempo decorrido exige um gatilho agendado.',path:['conditions']});
   if(value.conditions.all.some(item=>item.type==='new_whatsapp_conversation')&&value.trigger_type!=='whatsapp.inbound_received')context.addIssue({code:'custom',message:'Conversa realmente nova exige o gatilho de nova mensagem recebida.',path:['conditions']});
+  if(value.actions.some(item=>item.type==='send_whatsapp_welcome_consent')&&(value.trigger_type!=='whatsapp.inbound_received'||!value.conditions.all.some(item=>item.type==='new_whatsapp_conversation')))context.addIssue({code:'custom',message:'A mensagem inicial com autorização exige primeiro contato real, sem histórico.',path:['actions']});
   if(value.trigger_type==='no_reply_for_duration'&&!value.conditions.all.some(item=>item.type==='elapsed_minutes'))context.addIssue({code:'custom',message:'Informe quantos minutos sem resposta devem decorrer.',path:['conditions']});
   for(const [index,item] of value.actions.entries()){
    if((item.type==='assign_owner'||item.type==='create_task'||item.type==='mark_for_follow_up')&&'mode' in item&&item.mode==='fixed'&&!item.owner_id)context.addIssue({code:'custom',message:'Selecione o responsável fixo.',path:['actions',index,'owner_id']});

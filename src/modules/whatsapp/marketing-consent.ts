@@ -5,11 +5,26 @@ type ConsentContext={organizationId:string;recordId:string;conversationId:string
 const normalize=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+]+/g,' ').trim().replace(/\s+/g,' ');
 const affirmative=new Set(['sim','sim autorizo','sim eu autorizo','aceito','eu aceito','autorizo','concordo','pode enviar','quero receber','quero sim']);
 export const automaticConsentPrompt='Podemos continuar enviando pelo WhatsApp atualizações e lembretes sobre seu atendimento e orçamento da Peclat Solar?';
+export const initialWelcomeConsentPrompt=`Olá! ☀️ Obrigado por entrar em contato com a *Peclat Solar*.
+
+Para adiantar seu orçamento, envie por favor:
+
+• Seu nome
+• Foto da conta de luz ou geração desejada
+• Endereço/localização da instalação
+
+Também podemos continuar enviando por aqui atualizações e lembretes sobre seu atendimento e orçamento.
+
+Você autoriza a *Peclat Solar* a continuar entrando em contato com você pelo WhatsApp?`;
+export const consentReplyButtons=[
+ {type:'reply',reply:{id:'peclat_consent_yes',title:'Sim, autorizo'}},
+ {type:'reply',reply:{id:'peclat_consent_no',title:'Não quero'}},
+] as const;
 
 /** Requires the business name, WhatsApp, a permission request, and an ongoing message category. */
 export function isExplicitWhatsAppMarketingPrompt(value:string){
  const text=normalize(value);
- return text===normalize(automaticConsentPrompt)||(text.length<=4000&&!/\b(nao|nunca|jamais|sem)\b/.test(text)&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
+ return text===normalize(automaticConsentPrompt)||text===normalize(initialWelcomeConsentPrompt)||(text.length<=4000&&!/\b(nao|nunca|jamais|sem)\b/.test(text)&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
   /\b(autoriza|autorizacao|consente|consentimento|concorda|aceita|permite|podemos)\b/.test(text)&&
   /\b(receber|receba|enviar|enviaremos)\b/.test(text)&&/\b(mensagem|mensagens)\b/.test(text)&&
   /\b(futura|futuras|mais|acompanhamento|novidade|novidades|oferta|ofertas|proposta|propostas|orcamento|orcamentos)\b/.test(text));

@@ -16,6 +16,7 @@ import {automationRuleInput,automationSettingsInput,isBusinessOpen} from '../src
 import {emitAutomationEvent} from '../src/modules/automations/events';
 import {processAutomationJobs,scheduleTimedAutomationJobs} from '../src/modules/automations/engine';
 import type {Actor} from '../src/modules/auth/policy';
+import {consentReplyButtons,initialWelcomeConsentPrompt} from '../src/modules/whatsapp/marketing-consent';
 
 let postgres:LocalPostgres,admin:Actor,manager:Actor,seller:Actor,other:Actor,org:string,teamId:string;
 const password='Automação de teste exclusiva';
@@ -132,21 +133,22 @@ test('pausa, opt-out e kill switch impedem envio; mock Meta recebe somente caso 
   await setAutomationRuleActive(admin,created.id,false,created.version+1);
  }finally{if(oldToken===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=oldToken;}
 });
-test('boas-vindas são enviadas somente no primeiro inbound sem qualquer histórico',async()=>{
- const oldToken=process.env.WHATSAPP_ACCESS_TOKEN;process.env.WHATSAPP_ACCESS_TOKEN='token-falso-welcome';let posts=0;
- const fake=async(_input:string,init?:RequestInit)=>{if(init?.method==='POST'){posts++;return new Response(JSON.stringify({messages:[{id:`wamid.welcome.${posts}`}]}),{status:200,headers:{'content-type':'application/json'}});}throw new Error('unexpected_meta_call');};
+test('boas-vindas com autorização são interativas e enviadas uma só vez no primeiro inbound sem histórico',async()=>{
+ const oldToken=process.env.WHATSAPP_ACCESS_TOKEN;process.env.WHATSAPP_ACCESS_TOKEN='token-falso-welcome';let posts=0;const payloads:Record<string,unknown>[]=[];
+ const fake=async(_input:string,init?:RequestInit)=>{if(init?.method==='POST'){posts++;payloads.push(JSON.parse(String(init.body)));return new Response(JSON.stringify({messages:[{id:`wamid.welcome.${posts}`}]}),{status:200,headers:{'content-type':'application/json'}});}throw new Error('unexpected_meta_call');};
  const current=await automationSettings(admin);await saveAutomationSettings(admin,{whatsapp_outbound_enabled:true,timezone:current.timezone,business_hours:current.business_hours,max_outbound_per_conversation_24h:20,max_outbound_per_rule_24h:100,version:current.version});
- const created=await saveAutomationRule(admin,rule('Boas-vindas seguras','whatsapp.inbound_received',[{type:'send_whatsapp_message',text:'Mensagem inicial.',continue_on_error:false}],{all:[{type:'new_whatsapp_conversation'}]},0));await setAutomationRuleActive(admin,created.id,true,created.version);
+ const created=await saveAutomationRule(admin,rule('Boas-vindas seguras','whatsapp.inbound_received',[{type:'send_whatsapp_welcome_consent',continue_on_error:false}],{all:[{type:'new_whatsapp_conversation'}]},0));await setAutomationRuleActive(admin,created.id,true,created.version);
  let serial=0;
  const conversation=async()=>(await database().query<{id:string}>(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,last_inbound_at) VALUES ($1,$2,$3,now()) RETURNING id`,[org,`5531966${String(++serial).padStart(6,'0')}`,`+5531966${String(serial).padStart(6,'0')}`])).rows[0].id;
  const inbound=async(id:string,eventId:string)=>{const message=(await database().query<{id:string}>(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,meta_timestamp,processing_status) VALUES ($1,$2,$3,'inbound','text','Teste seguro','5531000000000',now(),'processed') RETURNING id`,[org,id,eventId])).rows[0].id;await transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'whatsapp.inbound_received',eventId,entityType:'conversation',entityId:id,conversationId:id,payload:{message_id:message,direction:'inbound',message_type:'text'}}));return message;};
  try{
   const fresh=await conversation();await inbound(fresh,'wamid.welcome.fresh');await transaction(db=>emitAutomationEvent(db,{organizationId:org,type:'whatsapp.inbound_received',eventId:'wamid.welcome.fresh',entityType:'conversation',entityId:fresh,conversationId:fresh}));await Promise.all([processAutomationJobs(20,fake),processAutomationJobs(20,fake)]);assert.equal(posts,1);
+  const interactive=payloads[0].interactive as {type:string;body:{text:string};action:{buttons:unknown[]}};assert.equal(payloads[0].type,'interactive');assert.equal(interactive.type,'button');assert.equal(interactive.body.text,initialWelcomeConsentPrompt);assert.deepEqual(interactive.action.buttons,consentReplyButtons);
   await inbound(fresh,'wamid.welcome.second');await processAutomationJobs(20,fake);assert.equal(posts,1);
   const replied=await conversation();await database().query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,meta_timestamp,processing_status,delivery_status,origin,sent_by,client_request_id) VALUES ($1,$2,'wamid.welcome.prior.out','outbound','text','Atendimento anterior','',now()-interval '1 minute','processed','sent','manual',$3,gen_random_uuid())`,[org,replied,admin.userId]);await inbound(replied,'wamid.welcome.reply');await processAutomationJobs(20,fake);assert.equal(posts,1);
   const active=await conversation();await inbound(active,'wamid.welcome.active');await database().query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,meta_timestamp,processing_status,delivery_status,origin,sent_by,client_request_id) VALUES ($1,$2,'wamid.welcome.active.out','outbound','text','Vendedor respondeu','',now(),'processed','sent','manual',$3,gen_random_uuid())`,[org,active,admin.userId]);await processAutomationJobs(20,fake);await processAutomationJobs(20,fake);assert.equal(posts,1);
   assert.equal(await counts("SELECT count(*)::int total FROM automation_runs WHERE rule_id=$1 AND status='skipped' AND skipped_reason='automation_existing_conversation'",[created.id]),3);
-  assert.equal(await counts("SELECT count(*)::int total FROM whatsapp_messages WHERE organization_id=$1 AND origin='automation' AND text_body='Mensagem inicial.'",[org]),1);
+  assert.equal(await counts("SELECT count(*)::int total FROM whatsapp_messages WHERE organization_id=$1 AND origin='automation' AND message_type='interactive' AND text_body=$2 AND safe_metadata->>'system_purpose'='consent_request'",[org,initialWelcomeConsentPrompt]),1);
  }finally{await setAutomationRuleActive(admin,created.id,false,created.version+1);if(oldToken===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=oldToken;}
 });
 test('horário e limites externos geram códigos distintos sem chamar a Meta quando bloqueados',async()=>{
@@ -198,4 +200,4 @@ test('conversa sem resposta agenda uma tarefa somente após o tempo configurado'
  assert.equal(await counts('SELECT count(*)::int total FROM automation_jobs WHERE automation_rule_id=$1 AND entity_id=$2',[created.id,conversation]),1);
  await setAutomationRuleActive(admin,created.id,false,created.version+1);
 });
-test('schema de regras rejeita chaves externas, tempo fora de gatilho agendado e ação inválida',()=>{const input=rule('Regra inválida','lead.created',[task('Atender')]);assert.equal(automationRuleInput.safeParse({...input,organization_id:randomUUID()}).success,false);assert.equal(automationRuleInput.safeParse({...input,actions:[{type:'send_whatsapp_message',text:'',continue_on_error:false}]}).success,false);assert.equal(automationRuleInput.safeParse({...input,conditions:{all:[{type:'elapsed_minutes',value:30}]}}).success,false);});
+test('schema de regras rejeita chaves externas, tempo fora de gatilho agendado e ação inválida',()=>{const input=rule('Regra inválida','lead.created',[task('Atender')]);assert.equal(automationRuleInput.safeParse({...input,organization_id:randomUUID()}).success,false);assert.equal(automationRuleInput.safeParse({...input,actions:[{type:'send_whatsapp_message',text:'',continue_on_error:false}]}).success,false);assert.equal(automationRuleInput.safeParse({...input,conditions:{all:[{type:'elapsed_minutes',value:30}]}}).success,false);assert.equal(automationRuleInput.safeParse({...input,actions:[{type:'send_whatsapp_welcome_consent',continue_on_error:false}]}).success,false);});

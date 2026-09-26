@@ -2,7 +2,7 @@ import type {PoolClient} from 'pg';
 import {database,transaction} from '@/server/db';
 import {serviceWindow} from './domain';
 import {MetaSendError,metaConfiguration,sendMetaMessage,type MetaFetcher} from './meta';
-import {automaticConsentPrompt} from './marketing-consent';
+import {automaticConsentPrompt,consentReplyButtons} from './marketing-consent';
 
 type Db=Pick<PoolClient,'query'>;
 type Candidate={organization_id:string;conversation_id:string};
@@ -51,13 +51,14 @@ export async function processAutomaticConsentRequests(limit=20,fetcher?:MetaFetc
    AND COALESCE(p.whatsapp_consent_status,'unknown')='unknown'
    AND EXISTS(SELECT 1 FROM whatsapp_messages m WHERE m.organization_id=c.organization_id AND m.conversation_id=c.id AND m.direction='outbound' AND m.meta_timestamp>c.last_inbound_at AND m.origin<>'lead_recovery' AND COALESCE(m.safe_metadata->>'system_purpose','')<>'consent_request' AND m.delivery_status IN ('sent','delivered','read'))
    AND NOT EXISTS(SELECT 1 FROM whatsapp_messages m WHERE m.organization_id=c.organization_id AND m.conversation_id=c.id AND m.client_request_id=c.id)
+   AND NOT EXISTS(SELECT 1 FROM whatsapp_messages m WHERE m.organization_id=c.organization_id AND m.conversation_id=c.id AND m.direction='outbound' AND COALESCE(m.safe_metadata->>'system_purpose','')='consent_request')
   ORDER BY c.last_inbound_at,c.id LIMIT $2`,[now,limit,organizationId??null]);
  let sent=0,skipped=0;
  for(const candidate of candidates.rows){
   const item=await transaction(db=>reserve(db,candidate,now));if(!item){skipped++;continue;}
   if(!await claim(item,new Date())){skipped++;continue;}
   try{
-   const result=await sendMetaMessage(metaConfiguration(item.integration),{messaging_product:'whatsapp',recipient_type:'individual',to:item.recipient,type:'interactive',interactive:{type:'button',body:{text:automaticConsentPrompt},action:{buttons:[{type:'reply',reply:{id:'peclat_consent_yes',title:'Sim, autorizo'}},{type:'reply',reply:{id:'peclat_consent_no',title:'Não quero'}}]}}},fetcher);
+   const result=await sendMetaMessage(metaConfiguration(item.integration),{messaging_product:'whatsapp',recipient_type:'individual',to:item.recipient,type:'interactive',interactive:{type:'button',body:{text:automaticConsentPrompt},action:{buttons:consentReplyButtons}}},fetcher);
    await transaction(async db=>{
     await db.query(`UPDATE whatsapp_messages SET meta_message_id=$3,delivery_status='sent',sent_at=now(),safe_metadata=safe_metadata||'{"request_state":"sent"}'::jsonb WHERE organization_id=$1 AND id=$2`,[item.organizationId,item.messageId,result.wamid]);
     await db.query(`UPDATE whatsapp_conversations SET last_message_preview=$3,last_message_type='interactive',last_message_at=GREATEST(COALESCE(last_message_at,$4),$4),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2 AND (last_message_at IS NULL OR last_message_at<=$4)`,[item.organizationId,item.conversationId,automaticConsentPrompt,new Date()]);
