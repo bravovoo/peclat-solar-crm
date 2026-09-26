@@ -72,3 +72,9 @@ test('só OptIn verdadeiro em Flow com texto explícito pode autorizar mensagens
  assert.equal(hasExplicitFlowMarketingOptIn({screens:[{layout:{children:[{type:'OptIn',name:'consent',label:'Aceito receber futuras mensagens pelo WhatsApp.'}]}}]},{consent:true}),false);
  assert.equal(hasExplicitFlowMarketingOptIn({screens:[{layout:{children:[{type:'RadioButtonsGroup',name:'consent',label:'Aceito receber futuras mensagens da Peclat Solar pelo WhatsApp'}]}}]},{consent:'true'}),false);
 });
+
+test('negação em pedido ou opção de consentimento não é autorização para marketing',()=>{
+ assert.equal(isExplicitWhatsAppMarketingPrompt('Você não autoriza a Peclat Solar a enviar futuras mensagens pelo WhatsApp?'),false);
+ const flow={type:'OptIn',name:'refusal',label:'Não quero receber futuras mensagens da Peclat Solar pelo WhatsApp.'};
+ assert.equal(hasExplicitFlowMarketingOptIn(flow,{refusal:true}),false);
+});

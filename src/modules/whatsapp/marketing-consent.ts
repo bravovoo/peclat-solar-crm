@@ -8,7 +8,7 @@ const affirmative=new Set(['sim','sim autorizo','sim eu autorizo','aceito','eu a
 /** Requires the business name, WhatsApp, a permission request, and an ongoing message category. */
 export function isExplicitWhatsAppMarketingPrompt(value:string){
  const text=normalize(value);
- return text.length<=4000&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
+ return text.length<=4000&&!/\b(nao|nunca|jamais|sem)\b/.test(text)&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
   /\b(autoriza|autorizacao|consente|consentimento|concorda|aceita|permite|podemos)\b/.test(text)&&
   /\b(receber|receba|enviar|enviaremos)\b/.test(text)&&/\b(mensagem|mensagens)\b/.test(text)&&
   /\b(futura|futuras|mais|acompanhamento|novidade|novidades|oferta|ofertas|proposta|propostas|orcamento|orcamentos)\b/.test(text);
@@ -25,7 +25,7 @@ function optInFields(value:unknown):{name:string;label:string}[]{
 
 function explicitOptInLabel(value:string){
  const text=normalize(value);
- return text.length>0&&text.length<=120&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
+ return text.length>0&&text.length<=120&&!/\b(nao|nunca|jamais|sem)\b/.test(text)&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
   /\b(receber|receba|mensagens?)\b/.test(text)&&
   /\b(futura|futuras|mais|acompanhamento|novidade|novidades|oferta|ofertas|proposta|propostas|orcamento|orcamentos)\b/.test(text);
 }

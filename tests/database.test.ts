@@ -96,7 +96,7 @@ test('Hyperdrive abre e encerra um cliente por consulta e preserva a transação
     assert.equal((await database().query<{total:number}>("SELECT count(*)::int total FROM audit_logs WHERE action='hyperdrive.rollback'")).rows[0].total,0);
     const prototype=pg.Client.prototype as unknown as {end:()=>Promise<void>};
     const originalEnd=prototype.end;
-    prototype.end=async()=>{throw new Error('encerramento do socket já concluído');};
+    prototype.end=async function(this:pg.Client){await originalEnd.call(this);throw new Error('encerramento do socket já concluído');};
     try{
       const result=await transaction(async client=>{
         await client.query('INSERT INTO audit_logs(organization_id,action) VALUES ($1,$2)',[orgA,'hyperdrive.close_error']);

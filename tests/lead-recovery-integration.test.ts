@@ -10,7 +10,7 @@ import {migrate} from '../scripts/migrate';
 import {seed} from '../scripts/seed';
 import {sessionActor,login} from '../src/modules/auth/service';
 import type {Actor} from '../src/modules/auth/policy';
-import {saveRecoverySettings,saveRecoveryConsent,simulateRecovery} from '../src/modules/lead-recovery/repository';
+import {saveRecoverySettings,saveRecoveryConsent,simulateRecovery,operateRecovery,recoveryDashboard} from '../src/modules/lead-recovery/repository';
 import {refreshLeadRecoveryEnrollments,processLeadRecoveryAttempts} from '../src/modules/lead-recovery/engine';
 import {receiveMetaWebhook} from '../src/modules/whatsapp/webhook';
 import {loadLeadFacts,assessLead,loadRecoveryConfig} from '../src/modules/lead-recovery/eligibility';
@@ -50,6 +50,10 @@ async function inbound(f:Pick<Fixture,'wa'|'phoneId'|'businessId'>,date:Date,bod
 }
 async function echo(f:Pick<Fixture,'wa'|'phoneId'|'businessId'>,date:Date,id:string,body:string){
  const raw=Buffer.from(JSON.stringify({object:'whatsapp_business_account',entry:[{id:f.businessId,changes:[{field:'smb_message_echoes',value:{metadata:{phone_number_id:f.phoneId},message_echoes:[{to:f.wa,id,timestamp:String(date.getTime()/1000),type:'text',text:{body}}]}}]}]}));
+ return receiveMetaWebhook(raw,'sha256='+createHmac('sha256','mock').update(raw).digest('hex'),'mock');
+}
+async function buttonReply(f:Fixture,date:Date,title:string,contextId=''){
+ const raw=Buffer.from(JSON.stringify({object:'whatsapp_business_account',entry:[{id:f.businessId,changes:[{field:'messages',value:{metadata:{phone_number_id:f.phoneId},messages:[{from:f.wa,id:`wamid.button.${crypto.randomUUID()}`,timestamp:String(date.getTime()/1000),type:'interactive',context:{id:contextId},interactive:{type:'button_reply',button_reply:{id:'test-response',title}}}]}}]}]}));
  return receiveMetaWebhook(raw,'sha256='+createHmac('sha256','mock').update(raw).digest('hex'),'mock');
 }
 async function explicitConsent(f:Fixture,baseDate:Date){const promptId=`wamid.consent.${crypto.randomUUID()}`;await echo(f,new Date(baseDate.getTime()+1000),promptId,'Você autoriza a Peclat Solar a enviar futuras mensagens de acompanhamento pelo WhatsApp?');await inbound(f,new Date(baseDate.getTime()+2000),'Sim, autorizo',promptId);return promptId;}
@@ -164,4 +168,50 @@ test('outbound de automação/IA inicia espera e pausa global impede envio',asyn
  assert.equal((await database().query('SELECT attempts FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0].attempts,0);
  await database().query('UPDATE organization_automation_settings SET whatsapp_outbound_enabled=true WHERE organization_id=$1',[f.org]);
  assert.equal((await processLeadRecoveryAttempts(20,fake,new Date(at(3,15).getTime()+300000))).sent,1);
+});
+
+test('reagendamento altera a tentativa pendente e impede envio no prazo anterior',async()=>{
+ const f=await fixture();await refreshLeadRecoveryEnrollments(base);const e=await cycle(f);
+ await operateRecovery(f.actor,e.id,{action:'reschedule',version:e.version,scheduled_for:at(4).toISOString()});
+ const attempt=(await database().query('SELECT scheduled_for FROM lead_recovery_attempts WHERE organization_id=$1 AND step_position=1',[f.org])).rows[0];
+ assert.equal(new Date(attempt.scheduled_for).toISOString(),at(4).toISOString());
+ assert.equal((await pump(2)).sent,0);assert.equal((await pump(4)).sent,1);
+});
+
+test('descadastramento por botão bloqueia novos ciclos e preserva evidência de autorização',async()=>{
+ const f=await fixture();await refreshLeadRecoveryEnrollments(base);
+ const before=(await database().query('SELECT consent_source,consented_at FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0];
+ await buttonReply(f,at(1),'Não quero');
+ const preference=(await database().query('SELECT whatsapp_consent_status,consent_source,consented_at FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0];
+ assert.equal(preference.whatsapp_consent_status,'opted_out');assert.equal(preference.consent_source,before.consent_source);assert.deepEqual(preference.consented_at,before.consented_at);
+ assert.equal((await cycle(f)).status,'cancelled');await outbound(f,at(2));assert.equal((await pump(4)).sent,0);
+});
+
+test('reagendamento não interfere em uma tentativa já em processamento',async()=>{
+ const f=await fixture();await refreshLeadRecoveryEnrollments(base);const e=await cycle(f);
+ await database().query("UPDATE lead_recovery_attempts SET status='processing',locked_at=$2 WHERE organization_id=$1",[f.org,at(2)]);
+ await assert.rejects(()=>operateRecovery(f.actor,e.id,{action:'reschedule',version:e.version,scheduled_for:at(4).toISOString()}),/em processamento/);
+ assert.equal((await cycle(f)).version,e.version);
+});
+
+test('botão afirmativo exige contexto verificável e não envia pedido de autorização',async()=>{
+ const f=await fixture(false),before=(await database().query("SELECT count(*)::int n FROM whatsapp_messages WHERE organization_id=$1 AND direction='outbound'",[f.org])).rows[0].n;
+ await buttonReply(f,at(1),'Sim, autorizo');
+ assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,0);
+ assert.equal((await database().query("SELECT count(*)::int n FROM whatsapp_messages WHERE organization_id=$1 AND direction='outbound'",[f.org])).rows[0].n,before);
+ const promptId=`wamid.permission.${crypto.randomUUID()}`;
+ await echo(f,at(2),promptId,'Você autoriza a Peclat Solar a enviar futuras mensagens de acompanhamento pelo WhatsApp?');
+ await buttonReply(f,at(3),'Sim, autorizo',promptId);
+ assert.equal((await database().query('SELECT whatsapp_consent_status FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0].whatsapp_consent_status,'opted_in');
+ assert.equal((await refreshLeadRecoveryEnrollments(at(4))).created,0); // Latest message is still inbound.
+ await outbound(f,at(4));assert.equal((await refreshLeadRecoveryEnrollments(at(4))).created,1);
+});
+
+test('indicador de mensagens enviadas respeita carteira do vendedor',async()=>{
+ const f=await fixture();await pump(2);
+ const seller={...f.actor,role:'seller'} as Actor;
+ const hidden=await recoveryDashboard(seller);assert.equal(hidden.total,0);assert.equal(hidden.metrics.sent,0);
+ await database().query('UPDATE crm_records SET owner_id=$2 WHERE id=$1',[f.lead,seller.userId]);
+ assert.equal((await recoveryDashboard(seller)).metrics.sent,1);
+ await assert.rejects(()=>recoveryDashboard({...seller,permissions:[]}),/permiss|acesso/i);
 });
