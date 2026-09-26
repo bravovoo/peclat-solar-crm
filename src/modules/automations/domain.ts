@@ -35,6 +35,7 @@ const condition=z.discriminatedUnion('type',[
  z.object({type:z.literal('outside_business_hours')}).strict(),
  z.object({type:z.literal('inside_business_hours')}).strict(),
  z.object({type:z.literal('conversation_unassigned')}).strict(),
+ z.object({type:z.literal('new_whatsapp_conversation')}).strict(),
  z.object({type:z.literal('record_kind'),value:z.enum(['lead','customer','company'])}).strict(),
  z.object({type:z.literal('stage_equals'),value:safeText(40).min(1)}).strict(),
  z.object({type:z.literal('elapsed_minutes'),value:z.number().int().min(1).max(525600)}).strict(),
@@ -62,6 +63,7 @@ export const automationRuleInput=z.object({
  cooldown_minutes:z.number().int().min(0).max(43200),version:z.number().int().positive().nullable().default(null),
 }).strict().superRefine((value,context)=>{
   if(value.conditions.all.some(item=>item.type==='elapsed_minutes')&&!['no_reply_for_duration','follow_up_due'].includes(value.trigger_type))context.addIssue({code:'custom',message:'Tempo decorrido exige um gatilho agendado.',path:['conditions']});
+  if(value.conditions.all.some(item=>item.type==='new_whatsapp_conversation')&&value.trigger_type!=='whatsapp.inbound_received')context.addIssue({code:'custom',message:'Conversa realmente nova exige o gatilho de nova mensagem recebida.',path:['conditions']});
   if(value.trigger_type==='no_reply_for_duration'&&!value.conditions.all.some(item=>item.type==='elapsed_minutes'))context.addIssue({code:'custom',message:'Informe quantos minutos sem resposta devem decorrer.',path:['conditions']});
   for(const [index,item] of value.actions.entries()){
    if((item.type==='assign_owner'||item.type==='create_task'||item.type==='mark_for_follow_up')&&'mode' in item&&item.mode==='fixed'&&!item.owner_id)context.addIssue({code:'custom',message:'Selecione o responsável fixo.',path:['actions',index,'owner_id']});
@@ -71,7 +73,7 @@ export const automationRuleInput=z.object({
  });
 
 export const automationConversationInput=z.object({automations_paused:z.boolean().optional(),automation_blocked:z.boolean().optional(),version:z.number().int().positive()}).strict().refine(value=>value.automations_paused!==undefined||value.automation_blocked!==undefined,'Nenhuma alteração informada.');
-export const automationSimulationInput=z.object({trigger_type:z.enum(Object.keys(automationTriggers) as [AutomationTrigger,...AutomationTrigger[]]),outside_business_hours:z.boolean().default(false),conversation_unassigned:z.boolean().default(false),elapsed_minutes:z.number().int().min(0).max(525600).default(0),record_kind:z.enum(['lead','customer','company']).nullable().default(null),stage:z.string().trim().max(40).default('')}).strict();
+export const automationSimulationInput=z.object({trigger_type:z.enum(Object.keys(automationTriggers) as [AutomationTrigger,...AutomationTrigger[]]),outside_business_hours:z.boolean().default(false),conversation_unassigned:z.boolean().default(false),new_whatsapp_conversation:z.boolean().default(false),elapsed_minutes:z.number().int().min(0).max(525600).default(0),record_kind:z.enum(['lead','customer','company']).nullable().default(null),stage:z.string().trim().max(40).default('')}).strict();
 
 export function isBusinessOpen(hours:BusinessHours,timeZone:string,now=new Date()){
  const parts=new Intl.DateTimeFormat('en-CA',{timeZone,weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now);

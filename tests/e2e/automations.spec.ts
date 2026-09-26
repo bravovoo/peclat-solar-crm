@@ -18,7 +18,10 @@ test('admin cria, simula, ativa e desativa regra sem executar ação externa',as
  await expect(page.getByRole('heading',{name:'Automações comerciais'})).toBeVisible();
  await expect(page.getByText('Novas regras começam desativadas.')).toBeVisible();
  await page.getByLabel('Nome',{exact:true}).fill('Atendimento E2E');
+ await page.getByLabel('Condição').selectOption('new_whatsapp_conversation');
+ await expect(page.getByText(/primeiro contato real, sem qualquer outro histórico/)).toBeVisible();
  await page.getByLabel('Quando').selectOption('lead.created');
+ await expect(page.getByLabel('Condição')).toHaveValue('none');
  await page.getByLabel('Título da tarefa').fill('Revisar novo Lead E2E');
  await expect(page.getByText(/Quando novo lead/)).toBeVisible();
  const createdResponse=page.waitForResponse(response=>response.url().endsWith('/api/automations')&&response.request().method()==='POST');
