@@ -6,7 +6,7 @@ import {recoverySettingsInput} from '../src/modules/lead-recovery/domain';
 import {hasExplicitFlowMarketingOptIn,isAffirmativeWhatsAppConsent,isExplicitWhatsAppMarketingPrompt} from '../src/modules/whatsapp/marketing-consent';
 
 const now=new Date('2026-09-24T15:00:00Z');
-const config:RecoveryConfig={organization_id:crypto.randomUUID(),enabled:true,include_uncontacted:true,timezone:'America/Sao_Paulo',business_hours:Object.fromEntries(['1','2','3','4','5','6','7'].map(d=>[d,{enabled:true,start:'10:00',end:'14:00'}])),lead_stages:['contact'],seller_ids:[],default_owner_id:null,version:1,updated_by:crypto.randomUUID()};
+const config:RecoveryConfig={organization_id:crypto.randomUUID(),enabled:true,include_uncontacted:true,timezone:'America/Sao_Paulo',business_hours:Object.fromEntries(['1','2','3','4','5','6','7'].map(d=>[d,{enabled:d!=='7',start:'08:00',end:'20:00'}])),lead_stages:['contact'],seller_ids:[],default_owner_id:null,version:1,updated_by:crypto.randomUUID()};
 const steps:RecoveryStep[]=[{id:crypto.randomUUID(),position:1,delay_days:3,template_id:crypto.randomUUID(),header_parameters:[],body_parameters:[],template_name:'recuperar_lead',template_language:'pt_BR',template_status:'APPROVED',supported:true}];
 function fact(overrides:Partial<LeadFact>={}):LeadFact{return {id:crypto.randomUUID(),name:'Lead fictício',stage:'contact',status:'active',owner_id:crypto.randomUUID(),owner_name:'Vendedor',created_at:'2026-09-01T12:00:00Z',updated_at:'2026-09-20T12:00:00Z',phone:'+5531999990000',consent_status:'opted_in',consent_source:'Formulário',consent_version:1,service_started_at:null,service_source:'',conversation_id:crypto.randomUUID(),conversation_phone:'+5531999990000',anchor_message_id:crypto.randomUUID(),enrollment_anchor:null,enrollment_anchor_message_id:null,automations_paused:false,automation_blocked:false,last_inbound_at:null,last_manual_outbound_at:'2026-09-20T12:00:00Z',last_commercial_activity_at:null,future_task_at:null,has_won_opportunity:false,has_lost_opportunity:false,has_accepted_proposal:false,owner_active:true,enrollment_id:null,enrollment_status:null,enrollment_version:null,attempt_count:null,next_attempt_at:null,state_reason:null,...overrides};}
 
@@ -25,7 +25,7 @@ test('recuperação exclui consentimento, opt-out, tarefa futura e negociação 
 });
 
 test('configuração bloqueia campos extras e variáveis não autorizadas',()=>{
- const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:true,start:'10:00',end:'14:00'}]));
+ const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:day!=='7',start:'08:00',end:'20:00'}]));
  const base={enabled:false,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:['contact'],seller_ids:[],default_owner_id:crypto.randomUUID(),steps:[{position:1,delay_days:3,template_id:crypto.randomUUID(),header_parameters:[],body_parameters:['Olá {{lead_name}}']}],version:1};
  assert.equal(recoverySettingsInput.parse(base).enabled,false);
  assert.throws(()=>recoverySettingsInput.parse({...base,organization_id:crypto.randomUUID()}));
@@ -36,18 +36,18 @@ test('recuperação usa primeiro nome e fallback seguro sem nome',()=>{
  assert.equal(leadFirstName('  Maria da Silva  '),'Maria');
  assert.equal(leadFirstName('João-Pedro Souza'),'João-Pedro');
  assert.equal(leadFirstName('   '),'Cliente');
- const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:true,start:'10:00',end:'14:00'}]));
+ const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:day!=='7',start:'08:00',end:'20:00'}]));
  const input={enabled:false,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:['contact'],seller_ids:[],default_owner_id:crypto.randomUUID(),steps:[{position:1,delay_days:3,template_id:crypto.randomUUID(),header_parameters:[],body_parameters:['Olá {{lead_first_name}}']}],version:1};
  assert.equal(recoverySettingsInput.safeParse(input).success,true);
 });
 import {recoveryDueAt,recoveryIsOpen} from '../src/modules/lead-recovery/schedule';
 test('janela fixa de São Paulo: limites, domingo e prazo absoluto',()=>{
- const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(d=>[d,{enabled:d!=='7',start:'08:00',end:'18:00'}]));
- for(const [date,expected] of [['2030-01-09T12:59:59Z',false],['2030-01-09T13:00:00Z',true],['2030-01-09T16:59:59Z',true],['2030-01-09T17:00:00Z',false],['2030-01-13T14:00:00Z',false]] as const)assert.equal(recoveryIsOpen(hours,new Date(date)),expected);
- assert.equal(recoveryDueAt('2030-01-11T21:00:00Z',2,hours).toISOString(),'2030-01-14T13:00:00.000Z');
+ const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(d=>[d,{enabled:d!=='7',start:'08:00',end:'20:00'}]));
+ for(const [date,expected] of [['2030-01-09T10:59:59Z',false],['2030-01-09T11:00:00Z',true],['2030-01-09T18:00:00Z',true],['2030-01-09T22:59:59Z',true],['2030-01-09T23:00:00Z',false],['2030-01-09T23:30:00Z',false],['2030-01-13T14:00:00Z',false]] as const)assert.equal(recoveryIsOpen(hours,new Date(date)),expected);
+ assert.equal(recoveryDueAt('2030-01-11T21:00:00Z',2,hours).toISOString(),'2030-01-14T11:00:00.000Z');
 });
 test('quatro passos crescentes; quinto passo e inclusão de nunca contatados são rejeitados',()=>{
- const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(d=>[d,{enabled:true,start:'10:00',end:'14:00'}]));
+ const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(d=>[d,{enabled:d!=='7',start:'08:00',end:'20:00'}]));
  const input={enabled:false,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:['new'],seller_ids:[],default_owner_id:crypto.randomUUID(),steps:[2,5,7,10].map((d,i)=>({position:i+1,delay_days:d,template_id:crypto.randomUUID(),header_parameters:[],body_parameters:[]})),version:1};
  assert.equal(recoverySettingsInput.safeParse(input).success,true);
  assert.equal(recoverySettingsInput.safeParse({...input,include_uncontacted:true}).success,false);

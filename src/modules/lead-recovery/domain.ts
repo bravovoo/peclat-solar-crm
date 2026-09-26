@@ -13,7 +13,7 @@ export const recoverySettingsInput=z.object({
  enabled:z.boolean(),
  include_uncontacted:z.literal(false),
  timezone:z.literal('America/Sao_Paulo'),
- business_hours:businessHoursSchema.refine(hours=>Object.values(hours).some(day=>day.enabled),'Selecione pelo menos um dia.').refine(hours=>Object.values(hours).every(day=>day.start==='10:00'&&day.end==='14:00'),'Use a janela das 10h às 14h.'),
+ business_hours:businessHoursSchema.refine(hours=>Object.values(hours).some(day=>day.enabled),'Selecione pelo menos um dia.').refine(hours=>Object.values(hours).every(day=>day.start==='08:00'&&day.end==='20:00'),'Use a janela das 08h às 20h.'),
  lead_stages:z.array(leadStage).min(1).max(18),
  seller_ids:z.array(z.uuid()).max(200),
  default_owner_id:z.uuid(),

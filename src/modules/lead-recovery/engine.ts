@@ -95,9 +95,9 @@ async function finishSent(a:Attempt,messageId:string,now:Date){await transaction
  const e=(await db.query<Enrollment>('SELECT * FROM lead_recovery_enrollments WHERE organization_id=$1 AND id=$2 FOR UPDATE',[a.organization_id,a.enrollment_id])).rows[0];if(!e)return;
  await db.query("UPDATE lead_recovery_attempts SET status='sent',message_id=$3,sent_at=COALESCE(sent_at,$4),completed_at=$4,locked_at=NULL,safe_error='',updated_at=now() WHERE organization_id=$1 AND id=$2",[a.organization_id,a.id,messageId,now]);
  if(e.status!=='scheduled')return;
- const snapshot=parse<Snapshot>(e.sequence_snapshot),next=snapshot.steps?.find(s=>s.position===a.step_position+1&&s.position<=4);
+ const snapshot=parse<Snapshot>(e.sequence_snapshot),next=snapshot.steps?.find(s=>s.position===a.step_position+1&&s.position<=4),loaded=await loadRecoveryConfig(db,a.organization_id);
  await db.query('UPDATE lead_recovery_enrollments SET attempt_count=GREATEST(attempt_count,$3),last_attempt_at=$4,version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2',[a.organization_id,e.id,a.step_position,now]);
- if(next)await insertAttempt(db,a.organization_id,e,next,snapshot.business_hours);
+ if(next&&loaded)await insertAttempt(db,a.organization_id,e,next,loaded.settings.business_hours);
  else await db.query("UPDATE lead_recovery_enrollments SET status='completed',next_attempt_at=NULL,state_reason='sequence_completed' WHERE organization_id=$1 AND id=$2",[a.organization_id,e.id]);
 });}
 async function failAttempt(a:Attempt,error:unknown,now:Date){

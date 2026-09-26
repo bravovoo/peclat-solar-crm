@@ -120,7 +120,7 @@ test('tabelas públicas do CRM usam RLS sem políticas abertas',async()=>{
 test('recuperação de leads agenda, envia com Meta simulada e interrompe após resposta',async()=>{
  const oldToken=process.env.WHATSAPP_ACCESS_TOKEN;process.env.WHATSAPP_ACCESS_TOKEN='token-local-ficticio';
  const testNow=new Date();testNow.setUTCHours(15,0,0,0);
- const allHours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:true,start:'10:00',end:'14:00'}]));
+ const allHours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:day!=='7',start:'08:00',end:'20:00'}]));
  try{
   await database().query("INSERT INTO whatsapp_integrations(organization_id,status,account_name,phone_number_id,business_account_id,display_phone_number,api_version,created_by,updated_by) VALUES ($1,'connected','Teste de recuperação','123456789','987654321','+55 31 8888-0112','v99.0',$2,$2) ON CONFLICT(organization_id) DO UPDATE SET status='connected',phone_number_id='123456789',business_account_id='987654321',api_version='v99.0',updated_by=$2",[orgA,admin.userId]);
   await database().query(`INSERT INTO organization_automation_settings(organization_id,whatsapp_outbound_enabled,timezone,business_hours,max_outbound_per_conversation_24h,max_outbound_per_rule_24h,updated_by) VALUES ($1,true,'America/Sao_Paulo',$2,20,1000,$3) ON CONFLICT(organization_id) DO UPDATE SET whatsapp_outbound_enabled=true,business_hours=EXCLUDED.business_hours,updated_by=EXCLUDED.updated_by`,[orgA,JSON.stringify(allHours),admin.userId]);

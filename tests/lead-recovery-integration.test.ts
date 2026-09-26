@@ -20,7 +20,7 @@ import {loadLeadFacts,assessLead,loadRecoveryConfig} from '../src/modules/lead-r
 let server:EmbeddedPostgres,admin:Actor;let n=0;
 const base=new Date('2030-01-07T14:00:00Z'); // Monday 11h São Paulo
 const at=(days:number,hour=14)=>{const d=new Date(base.getTime()+days*86400000);d.setUTCHours(hour,0,0,0);return d;};
-const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:true,start:'10:00',end:'14:00'}]));
+const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:day!=='7',start:'08:00',end:'20:00'}]));
 before(async()=>{
  const port=await new Promise<number>(done=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const a=s.address();if(a&&typeof a==='object')s.close(()=>done(a.port));});});
  await mkdir(resolve('.local/tests'),{recursive:true});const dir=await mkdtemp(resolve('.local/tests/recovery-'));
@@ -113,7 +113,7 @@ for(const day of [3,8])test(`inbound D+${day} cancela restante e nova outbound p
  assert.equal((await cycle(f)).status,'responded');assert.equal((await pump(10)).sent,0);
  const pending=(await database().query("SELECT count(*)::int n FROM lead_recovery_attempts WHERE organization_id=$1 AND status IN ('pending','processing')",[f.org])).rows[0].n;assert.equal(pending,0);
  await outbound(f,at(day+1));await refreshLeadRecoveryEnrollments(at(day+1));assert.equal((await cycle(f)).status,'scheduled');assert.equal(new Date((await cycle(f)).inactivity_anchor).toISOString(),at(day+1).toISOString());
- assert.equal((await pump(day+3)).sent,1);
+ assert.equal((await pump(day===3?7:day+3)).sent,1);
 });
 test('nova manual substitui ciclo ativo; failed/pending não mudam a base',async()=>{
  const f=await fixture();await pump(2);const old=(await cycle(f)).id;await outbound(f,at(3));await refreshLeadRecoveryEnrollments(at(3));
@@ -154,17 +154,31 @@ test('descadastramento inbound bloqueia mesmo antes de existir uma sequência de
  assert.equal((await database().query('SELECT automation_blocked FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[f.org,f.conversation])).rows[0].automation_blocked,true);
  assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,0);
 });
-test('janela SP 10–14 mantém vencida pendente sem gastar retries e respeita domingo',async()=>{
+test('janela SP 08–20 mantém vencida pendente sem gastar retries e respeita domingo',async()=>{
  const f=await fixture();await refreshLeadRecoveryEnrollments(base);
- await database().query('UPDATE lead_recovery_attempts SET scheduled_for=$2 WHERE organization_id=$1',[f.org,at(2,12)]);
- assert.equal((await processLeadRecoveryAttempts(20,fake,at(2,12))).sent,0);
+ const afterClose=new Date('2030-01-09T23:00:00Z'),nextOpen=new Date('2030-01-10T11:00:00Z');
+ await database().query('UPDATE lead_recovery_attempts SET scheduled_for=$2 WHERE organization_id=$1',[f.org,afterClose]);
+ assert.equal((await processLeadRecoveryAttempts(20,fake,afterClose)).sent,0);
  assert.equal((await database().query('SELECT attempts FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0].attempts,0);
- assert.equal((await processLeadRecoveryAttempts(20,fake,at(2,13))).sent,0); // due 11h, not yet due at 10h
- assert.equal((await processLeadRecoveryAttempts(20,fake,at(2,14))).sent,1);
- assert.equal((await processLeadRecoveryAttempts(20,fake,at(5,17))).sent,0);
- const a=(await database().query('SELECT scheduled_for,attempts FROM lead_recovery_attempts WHERE organization_id=$1 AND step_position=2',[f.org])).rows[0];assert.equal(new Date(a.scheduled_for).toISOString(),at(6,13).toISOString());assert.equal(a.attempts,0);
- await database().query(`UPDATE organization_lead_recovery_settings SET business_hours=jsonb_set(business_hours,'{7,enabled}','false') WHERE organization_id=$1`,[f.org]);
- assert.equal((await processLeadRecoveryAttempts(20,fake,at(6,13))).sent,0);assert.equal((await processLeadRecoveryAttempts(20,fake,at(7,13))).sent,1);
+ assert.equal((await processLeadRecoveryAttempts(20,fake,new Date('2030-01-10T10:59:59Z'))).sent,0);
+ assert.equal((await processLeadRecoveryAttempts(20,fake,nextOpen)).sent,1);
+ const sunday=new Date('2030-01-13T14:00:00Z'),mondayOpen=new Date('2030-01-14T11:00:00Z');
+ await database().query('UPDATE lead_recovery_attempts SET scheduled_for=$2 WHERE organization_id=$1 AND step_position=2',[f.org,sunday]);
+ assert.equal((await processLeadRecoveryAttempts(20,fake,sunday)).sent,0);
+ const a=(await database().query('SELECT scheduled_for,attempts FROM lead_recovery_attempts WHERE organization_id=$1 AND step_position=2',[f.org])).rows[0];assert.equal(new Date(a.scheduled_for).toISOString(),mondayOpen.toISOString());assert.equal(a.attempts,0);
+ assert.equal((await processLeadRecoveryAttempts(20,fake,mondayOpen)).sent,1);
+});
+test('alterar a janela realinha tentativa pendente sem alterar D+ nem envio manual',async()=>{
+ const f=await fixture(),oldHours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:day!=='7',start:'10:00',end:'14:00'}]));
+ await database().query('UPDATE organization_lead_recovery_settings SET business_hours=$2 WHERE organization_id=$1',[f.org,JSON.stringify(oldHours)]);
+ const anchor=new Date('2030-01-07T18:00:00Z');await outbound(f,anchor);await refreshLeadRecoveryEnrollments(anchor);
+ const before=(await database().query('SELECT eligible_at,scheduled_for,status FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0];
+ assert.equal(new Date(before.eligible_at).toISOString(),'2030-01-09T18:00:00.000Z');assert.equal(new Date(before.scheduled_for).toISOString(),'2030-01-10T13:00:00.000Z');assert.equal(before.status,'pending');
+ const loaded=await loadRecoveryConfig(database(),f.org);assert.ok(loaded);
+ await saveRecoverySettings(f.actor,{enabled:true,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:loaded.settings.lead_stages,seller_ids:loaded.settings.seller_ids,default_owner_id:loaded.settings.default_owner_id,steps:loaded.steps.map(step=>({position:step.position,delay_days:step.delay_days,template_id:step.template_id,header_parameters:step.header_parameters,body_parameters:step.body_parameters})),version:loaded.settings.version});
+ const after=(await database().query('SELECT eligible_at,scheduled_for,status FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0];
+ assert.equal(new Date(after.eligible_at).toISOString(),'2030-01-09T18:00:00.000Z');assert.equal(new Date(after.scheduled_for).toISOString(),'2030-01-09T18:00:00.000Z');assert.equal(after.status,'pending');
+ assert.equal((await processLeadRecoveryAttempts(20,fake,new Date('2030-01-09T17:59:59Z'))).sent,0);
 });
 test('rejeição explícita usa mesma tentativa; resultado incerto nunca reenvia',async()=>{
  const f=await fixture();await refreshLeadRecoveryEnrollments(base);let calls=0;
