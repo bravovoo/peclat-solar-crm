@@ -6,7 +6,7 @@ export const recoveryClassifications={not_contacted:'Não contatado',awaiting_re
 export const recoveryConsentStatuses={unknown:'Não informado',opted_in:'Autorizado',opted_out:'Descadastrado'} as const;
 
 const leadStage=z.enum(['new','contact','qualified','awaiting_bill','bill_received','analysis','sizing','budget','proposal','negotiation','documentation','contract','payment','won','lost']);
-const parameter=z.string().trim().min(1).max(1024).refine(value=>!value.includes('{{')||/^([^{}]|\{\{(lead_name|seller_name|organization_name)\}\})+$/.test(value),'Use somente as variáveis {{lead_name}}, {{seller_name}} ou {{organization_name}}.');
+const parameter=z.string().trim().min(1).max(1024).refine(value=>!value.includes('{{')||/^([^{}]|\{\{(lead_first_name|lead_name|seller_name|organization_name)\}\})+$/.test(value),'Use somente as variáveis {{lead_first_name}}, {{lead_name}}, {{seller_name}} ou {{organization_name}}.');
 const recoveryStep=z.object({position:z.number().int().min(1).max(5),delay_days:z.number().int().min(1).max(365),template_id:z.uuid(),header_parameters:z.array(parameter).max(20).default([]),body_parameters:z.array(parameter).max(50).default([])}).strict();
 
 export const recoverySettingsInput=z.object({

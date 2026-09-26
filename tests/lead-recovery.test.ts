@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {leadFirstName} from '../src/modules/lead-recovery/engine';
 import {assessLead,type LeadFact,type RecoveryConfig,type RecoveryStep} from '../src/modules/lead-recovery/eligibility';
 import {recoverySettingsInput} from '../src/modules/lead-recovery/domain';
 
@@ -28,4 +29,13 @@ test('configuração bloqueia campos extras e variáveis não autorizadas',()=>{
  assert.equal(recoverySettingsInput.parse(base).enabled,false);
  assert.throws(()=>recoverySettingsInput.parse({...base,organization_id:crypto.randomUUID()}));
  assert.throws(()=>recoverySettingsInput.parse({...base,steps:[{...base.steps[0],body_parameters:['{{phone}}']}]}));
+});
+
+test('recuperação usa primeiro nome e fallback seguro sem nome',()=>{
+ assert.equal(leadFirstName('  Maria da Silva  '),'Maria');
+ assert.equal(leadFirstName('João-Pedro Souza'),'João-Pedro');
+ assert.equal(leadFirstName('   '),'Cliente');
+ const hours=Object.fromEntries(['1','2','3','4','5','6','7'].map(day=>[day,{enabled:true,start:'08:00',end:'18:00'}]));
+ const input={enabled:false,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:['contact'],seller_ids:[],steps:[{position:1,delay_days:3,template_id:crypto.randomUUID(),header_parameters:[],body_parameters:['Olá {{lead_first_name}}']}],version:1};
+ assert.equal(recoverySettingsInput.safeParse(input).success,true);
 });

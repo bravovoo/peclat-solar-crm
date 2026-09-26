@@ -128,15 +128,34 @@ test('recuperação de leads agenda, envia com Meta simulada e interrompe após 
   const conversation=(await database().query("INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,record_id,link_status,link_source,automation_owner_id,last_message_at) VALUES ($1,'5531988800112','+5531988800112','Lead recuperação teste',$2,'identified','automatic',$3,now()-interval '5 days') RETURNING id",[orgA,lead.id,admin.userId])).rows[0];
   await database().query("INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,meta_timestamp,processing_status,sent_by,client_request_id,delivery_status,origin) VALUES ($1,$2,'wamid.recovery.manual','outbound','text','Contato humano','',now()-interval '5 days','processed',$3,$4,'sent','manual')",[orgA,conversation.id,admin.userId,crypto.randomUUID()]);
   await saveRecoveryConsent(admin,lead.id,{whatsapp_consent_status:'opted_in',consent_source:'Formulário de teste',version:null});
-  const current=await recoverySettings(admin);await saveRecoverySettings(admin,{enabled:true,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:allHours,lead_stages:['contact'],seller_ids:[],steps:[{position:1,delay_days:3,template_id:template.id,header_parameters:[],body_parameters:['{{lead_name}}']}],version:current.settings.version});
-  assert.equal((await refreshLeadRecoveryEnrollments()).created,1);let posts=0;const fake=async()=>{posts++;return new Response(JSON.stringify({messages:[{id:'wamid.recovery.sent'}]}),{status:200,headers:{'Content-Type':'application/json'}});};
-  assert.deepEqual(await processLeadRecoveryAttempts(20,fake),{processed:1,sent:1});assert.equal(posts,1);
-  const enrollment=(await database().query("SELECT id,status FROM lead_recovery_enrollments WHERE organization_id=$1 AND record_id=$2",[orgA,lead.id])).rows[0];assert.equal(enrollment.status,'completed');
-  await database().query("UPDATE lead_recovery_enrollments SET status='scheduled',next_attempt_at=now(),state_reason='' WHERE organization_id=$1 AND id=$2",[orgA,enrollment.id]);
+  const current=await recoverySettings(admin);await saveRecoverySettings(admin,{enabled:true,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:allHours,lead_stages:['contact'],seller_ids:[],steps:[
+   {position:1,delay_days:3,template_id:template.id,header_parameters:[],body_parameters:['{{lead_first_name}}']},
+   {position:2,delay_days:7,template_id:template.id,header_parameters:[],body_parameters:['{{lead_first_name}}']},
+   {position:3,delay_days:15,template_id:template.id,header_parameters:[],body_parameters:['{{lead_first_name}}']},
+  ],version:current.settings.version});
+  assert.equal((await refreshLeadRecoveryEnrollments()).created,1);let posts=0;const fake=async()=>{posts++;return posts===1?new Response(JSON.stringify({error:{code:131000,message:'Falha transitória simulada'}}),{status:400,headers:{'Content-Type':'application/json'}}):new Response(JSON.stringify({messages:[{id:`wamid.recovery.sent.${posts}`}]}),{status:200,headers:{'Content-Type':'application/json'}});};
+  assert.deepEqual(await processLeadRecoveryAttempts(20,fake),{processed:1,sent:0});assert.equal(posts,1);
+  const retry=(await database().query("SELECT id,enrollment_id,status,attempts FROM lead_recovery_attempts WHERE organization_id=$1",[orgA])).rows[0];assert.equal(retry.status,'pending');
+  assert.equal((await database().query("SELECT count(*)::int total FROM whatsapp_messages WHERE organization_id=$1 AND lead_recovery_attempt_id=$2",[orgA,retry.id])).rows[0].total,1);
+  await database().query("UPDATE lead_recovery_attempts SET scheduled_for=now() WHERE organization_id=$1 AND id=$2",[orgA,retry.id]);
+  assert.deepEqual(await processLeadRecoveryAttempts(20,fake),{processed:1,sent:1});assert.equal(posts,2);
+  const sent=(await database().query("SELECT text_body,delivery_status FROM whatsapp_messages WHERE organization_id=$1 AND lead_recovery_attempt_id=$2",[orgA,retry.id])).rows[0];assert.equal(sent.text_body,'Olá Lead');assert.equal(sent.delivery_status,'sent');
+  assert.equal((await database().query("SELECT count(*)::int total FROM whatsapp_messages WHERE organization_id=$1 AND lead_recovery_attempt_id=$2",[orgA,retry.id])).rows[0].total,1);
+  const enrollment=(await database().query("SELECT id,status,attempt_count FROM lead_recovery_enrollments WHERE organization_id=$1 AND record_id=$2",[orgA,lead.id])).rows[0];assert.equal(enrollment.status,'scheduled');assert.equal(enrollment.attempt_count,1);
+  const echoPayload={object:'whatsapp_business_account',entry:[{id:'987654321',changes:[{field:'smb_message_echoes',value:{metadata:{phone_number_id:'123456789'},message_echoes:[{from:'5531999991234',to:'5531988800112',id:'wamid.recovery.echo',timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:'Mensagem manual pelo celular'}}]}}]}]},echoRaw=Buffer.from(JSON.stringify(echoPayload)),echoSecret='segredo-echo-recuperacao',echoSignature='sha256='+createHmac('sha256',echoSecret).update(echoRaw).digest('hex');
+  await receiveMetaWebhook(echoRaw,echoSignature,echoSecret);assert.equal((await database().query('SELECT status FROM lead_recovery_enrollments WHERE organization_id=$1 AND id=$2',[orgA,enrollment.id])).rows[0].status,'scheduled');
   await transaction(db=>handleLeadRecoveryInbound(db,{organizationId:orgA,conversationId:conversation.id,recordId:lead.id,timestamp:new Date(),text:'Tenho interesse'}));
   assert.equal((await database().query('SELECT status FROM lead_recovery_enrollments WHERE organization_id=$1 AND id=$2',[orgA,enrollment.id])).rows[0].status,'responded');
+  assert.equal((await database().query("SELECT status FROM lead_recovery_attempts WHERE organization_id=$1 AND enrollment_id=$2 AND step_position=2",[orgA,enrollment.id])).rows[0].status,'cancelled');
   assert.equal((await database().query("SELECT count(*)::int n FROM user_notifications WHERE organization_id=$1 AND entity_id=$2",[orgA,lead.id])).rows[0].n,1);
   assert.equal((await recoveryDashboard(admin,{status:'responded'})).items.some(item=>item.id===lead.id),true);
+  await database().query("UPDATE lead_recovery_enrollments SET status='scheduled',response_at=NULL,next_attempt_at=now(),state_reason='' WHERE organization_id=$1 AND id=$2",[orgA,enrollment.id]);
+  await database().query("UPDATE lead_recovery_attempts SET status='pending',scheduled_for=now(),completed_at=NULL,safe_error='' WHERE organization_id=$1 AND enrollment_id=$2 AND step_position=2",[orgA,enrollment.id]);
+  assert.deepEqual(await processLeadRecoveryAttempts(20,fake),{processed:1,sent:1});
+  await database().query("UPDATE lead_recovery_attempts SET scheduled_for=now() WHERE organization_id=$1 AND enrollment_id=$2 AND step_position=3",[orgA,enrollment.id]);
+  assert.deepEqual(await processLeadRecoveryAttempts(20,fake),{processed:1,sent:1});assert.equal(posts,4);
+  assert.equal((await database().query('SELECT status FROM lead_recovery_enrollments WHERE organization_id=$1 AND id=$2',[orgA,enrollment.id])).rows[0].status,'completed');
+  assert.deepEqual((await database().query("SELECT step_position,status FROM lead_recovery_attempts WHERE organization_id=$1 AND enrollment_id=$2 ORDER BY step_position",[orgA,enrollment.id])).rows,[{step_position:1,status:'sent'},{step_position:2,status:'sent'},{step_position:3,status:'sent'}]);
  }finally{
   if(oldToken===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=oldToken;
   await database().query("DELETE FROM user_notifications WHERE organization_id=$1 AND entity_type='lead' AND entity_id IN (SELECT id FROM crm_records WHERE organization_id=$1 AND name='Lead recuperação teste')",[orgA]);
