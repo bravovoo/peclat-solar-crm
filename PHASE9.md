@@ -31,3 +31,13 @@ A migration `028_lead_recovery.sql` cria configuração e sequência por organiz
 Cada tentativa usa exclusivamente um modelo aprovado e suportado da própria organização. Parâmetros podem usar o primeiro nome sanitizado do lead, com fallback seguro quando o cadastro não possui nome utilizável. A fila usa bloqueio concorrente, identificador idempotente e revalida consentimento, elegibilidade, horário, conversa e configuração imediatamente antes do envio. Uma recusa explícita da Meta pode ser repetida de forma controlada no mesmo registro, por até três tentativas; resultado incerto ou aceitação sem confirmação local nunca é repetido automaticamente. Uma resposta inbound encerra a sequência na mesma transação do webhook, cancela tentativas futuras e notifica o vendedor; entrega, leitura e mensagens outbound do CRM ou do Business App não contam como resposta.
 
 O painel **Recuperação de Leads** oferece indicadores, filtros, simulação sem ação externa, horários, vendedores, etapas e sequência configuráveis. No cadastro do lead é possível registrar consentimento, consultar a próxima tentativa, pausar, cancelar, reagendar e retomar. Todas as tabelas novas usam RLS, sem `FORCE ROW LEVEL SECURITY`, sem policies públicas e sem privilégios diretos para `PUBLIC`, `anon`, `authenticated` ou `service_role`.
+
+### Identidade de contatos originados no WhatsApp
+
+- Toda mensagem inbound válida resolve uma identidade por `organization_id + wa_id` dentro da mesma transação do webhook.
+- Um número novo cria um Lead sem responsável, com origem `WhatsApp`, e vincula imediatamente conversa, histórico e identidade canônica.
+- Números já existentes são comparados de forma normalizada, inclusive em contatos relacionados; uma correspondência única é reutilizada e ambiguidades não são mescladas automaticamente.
+- Mensagens outbound e `smb_message_echoes` nunca criam Leads. Reprocessamentos permanecem idempotentes pelo ID da Meta e pela identidade WhatsApp.
+- O contato iniciado pelo cliente é registrado como atendimento pelo WhatsApp, separado do consentimento para marketing. A recuperação continua bloqueada até existir `opted_in` com origem registrada.
+- A migration `034_whatsapp_contact_identity.sql` corrige conversas inbound antigas: reutiliza somente correspondências fortes, marca ambiguidades e cria Lead apenas quando não existe candidato.
+- Formatações com espaços, parênteses, hífens, `+55` ou número nacional usam a mesma forma canônica. Alterações inferidas de nono dígito não são feitas automaticamente.

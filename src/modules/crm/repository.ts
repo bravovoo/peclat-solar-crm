@@ -4,6 +4,7 @@ import { AccessError, requirePermission, type Actor } from '@/modules/auth/polic
 import { contactSchema, filterSchema, noteSchema, recordSchema, tagSchema, uuid, type CommercialRecord, type Kind, type RecordData, type Tag } from './domain';
 import { assertCommercialAssignee, commercialScope, commercialScopeParams } from '@/modules/commercial/scope';
 import {emitAutomationEvent} from '@/modules/automations/events';
+import {syncWhatsAppRecordLinks} from '@/modules/whatsapp/contact-identity';
 type Db=Pick<PoolClient,'query'>;
 export class DuplicateError extends AccessError {
  constructor(public matches:{id:string;kind:Kind;name:string}[],public canOverride:boolean){super(409,'Encontramos um cadastro semelhante.');}
@@ -102,6 +103,7 @@ export async function saveRecordInTransaction(actor:Actor,kind:Kind,input:unknow
   await activity(db,actor,savedId!,'record.created','Cadastro criado.');
  }
  await setTags(db,actor,savedId!,data.tag_ids);
+ await syncWhatsAppRecordLinks(db,{organizationId:actor.organizationId,recordId:savedId!,numbers:[data.phone,data.whatsapp],profileName:data.name,source:'manual'});
  if(kind==='lead'&&!before)await emitAutomationEvent(db,{organizationId:actor.organizationId,type:'lead.created',eventId:`lead:${savedId}:created`,entityType:'record',entityId:savedId,recordId:savedId,payload:{owner_id:owner,stage:data.stage}});
  if(kind==='lead'&&before&&before.stage!==data.stage)await emitAutomationEvent(db,{organizationId:actor.organizationId,type:'lead.stage_changed',eventId:`lead:${savedId}:stage:${before.version+1}`,entityType:'record',entityId:savedId,recordId:savedId,payload:{owner_id:owner,stage:data.stage,previous_stage:before.stage}});
  if(data.allow_duplicate)await activity(db,actor,savedId!,'duplicate.confirmed','Possível duplicidade confirmada por usuário autorizado.');
@@ -133,6 +135,7 @@ export async function recordAction(actor:Actor,id:string,action:'archive'|'resto
   if(record.status==='converted')throw new AccessError(409,'O lead convertido deve ser preservado como origem do cliente.');
   if(action==='delete'){
    await db.query("UPDATE whatsapp_conversations SET record_id=NULL,link_status='unidentified',link_source='none',version=version+1,updated_at=now() WHERE organization_id=$1 AND record_id=$2",[actor.organizationId,id]);
+   await db.query('DELETE FROM crm_whatsapp_identities WHERE organization_id=$1 AND record_id=$2',[actor.organizationId,id]);
    await db.query('UPDATE crm_records SET deleted_at=now(),version=version+1 WHERE organization_id=$1 AND id=$2',[actor.organizationId,id]);
   }
   else await db.query('UPDATE crm_records SET status=$3,version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2',[actor.organizationId,id,action==='archive'?'archived':'active']);
@@ -176,10 +179,12 @@ export async function recordFeed(actor:Actor,id:string,type:'activities'|'notes'
 }
 export async function addNote(actor:Actor,input:unknown){const data=noteSchema.parse(input);return transaction(async db=>{await getRecord(actor,data.record_id,db,true);const r=await db.query('INSERT INTO crm_notes(organization_id,record_id,actor_id,body) VALUES ($1,$2,$3,$4) RETURNING id',[actor.organizationId,data.record_id,actor.userId,data.body]);await activity(db,actor,data.record_id,'note.created',data.body);return r.rows[0];});}
 export async function addContact(actor:Actor,input:unknown){const data=contactSchema.parse(input);return transaction(async db=>{
+ await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[actor.organizationId]);
  await getRecord(actor,data.record_id,db,true);
  const result=await db.query('INSERT INTO crm_contacts(organization_id,name,job_title,phone,whatsapp,email,observations) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',[actor.organizationId,data.name,data.job_title,data.phone,data.whatsapp,data.email,data.observations]);
  if(data.is_primary)await db.query('UPDATE crm_record_contacts SET is_primary=false WHERE organization_id=$1 AND record_id=$2',[actor.organizationId,data.record_id]);
  await db.query('INSERT INTO crm_record_contacts(organization_id,record_id,contact_id,is_primary) VALUES ($1,$2,$3,$4)',[actor.organizationId,data.record_id,result.rows[0].id,data.is_primary]);
+ await syncWhatsAppRecordLinks(db,{organizationId:actor.organizationId,recordId:data.record_id,numbers:[data.phone,data.whatsapp],profileName:data.name,source:'manual'});
  await activity(db,actor,data.record_id,'contact.created',data.name);return result.rows[0];
 });}
 export async function addTask(actor:Actor,input:unknown){return (await import('@/modules/commercial/repository')).saveTask(actor,input);}

@@ -1,6 +1,7 @@
 import type {PoolClient} from 'pg';
 import {emitAutomationEvent} from '@/modules/automations/events';
 import {emptyNormalizedFlow,type NormalizedFlowSubmission} from './flow-domain';
+import {setWhatsAppIdentity} from './contact-identity';
 
 type Db=Pick<PoolClient,'query'>;
 type Input={organizationId:string;conversationId:string;messageId:string;providerSubmissionId:string;contextMessageId:string;waId:string;actorId:string;response:Record<string,unknown>};
@@ -43,7 +44,7 @@ export async function processFlowSubmission(db:Db,input:Input){
   const linkedId=conversation.rows[0]?.record_id??null;
   let matches:RecordMatch[]=[];
   if(linkedId)matches=(await db.query<RecordMatch>('SELECT id,kind FROM crm_records WHERE organization_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE',[input.organizationId,linkedId])).rows;
-  else matches=(await db.query<RecordMatch>(`SELECT id,kind FROM crm_records WHERE organization_id=$1 AND deleted_at IS NULL AND (phone=$2 OR whatsapp=$2) ORDER BY id LIMIT 2 FOR UPDATE`,[input.organizationId,input.waId])).rows;
+  else matches=(await db.query<RecordMatch>(`SELECT id,kind FROM crm_records WHERE organization_id=$1 AND deleted_at IS NULL AND $2 IN (crm_normalize_whatsapp_number(phone),crm_normalize_whatsapp_number(whatsapp)) ORDER BY id LIMIT 2 FOR UPDATE`,[input.organizationId,input.waId])).rows;
   if(matches.length>1)result='ambiguous_contact';
   else if(!matches.length){
    const detail=details(flow,normalized);
@@ -53,12 +54,13 @@ export async function processFlowSubmission(db:Db,input:Input){
   }else{
    recordId=matches[0].id;
    if(matches[0].kind==='lead'){
-    await db.query(`UPDATE crm_records SET name=CASE WHEN lower(name) IN ('contato whatsapp','não identificada') THEN $3 ELSE name END,city=CASE WHEN city='' THEN $4 ELSE city END,state=CASE WHEN state='' THEN $5 ELSE state END,property_type=CASE WHEN property_type='' THEN $6 ELSE property_type END,financing_interest=financing_interest OR $7,battery_interest=battery_interest OR $8,observations=CASE WHEN observations='' THEN $9 ELSE left(observations||E'\n\n'||$9,4000) END,version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[input.organizationId,recordId,normalized.name,normalized.city,normalized.state,normalized.property_type,normalized.commercial_interest==='Financiar o sistema',normalized.commercial_interest==='Sistema com baterias',details(flow,normalized)]);result='lead_updated';
+    await db.query(`UPDATE crm_records SET name=CASE WHEN source='WhatsApp' OR lower(name) IN ('contato whatsapp','não identificada') THEN $3 ELSE name END,source=CASE WHEN source='WhatsApp' THEN 'WhatsApp Flow' ELSE source END,city=CASE WHEN city='' THEN $4 ELSE city END,state=CASE WHEN state='' THEN $5 ELSE state END,property_type=CASE WHEN property_type='' THEN $6 ELSE property_type END,financing_interest=financing_interest OR $7,battery_interest=battery_interest OR $8,observations=CASE WHEN observations='' THEN $9 ELSE left(observations||E'\n\n'||$9,4000) END,version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[input.organizationId,recordId,normalized.name,normalized.city,normalized.state,normalized.property_type,normalized.commercial_interest==='Financiar o sistema',normalized.commercial_interest==='Sistema com baterias',details(flow,normalized)]);result='lead_updated';
    }else result=matches[0].kind==='customer'?'customer_linked':'company_linked';
   }
  }
 
  if(recordId){
+  await setWhatsAppIdentity(db,{organizationId:input.organizationId,waId:input.waId,phoneE164:`+${input.waId}`,recordId,profileName:normalized.name,source:'flow'});
   for(const [name,color,enabled] of [['WhatsApp Flow','#20a77a',true],['Orçamento Solar','#d8a422',true],['Financiamento','#376bc7',normalized.commercial_interest==='Financiar o sistema'],['Visita Técnica','#8b5cf6',normalized.technical_visit==='Sim']] as const){if(!enabled)continue;const tagId=await ensureTag(db,input.organizationId,name,color);if(tagId)await db.query('INSERT INTO crm_record_tags(organization_id,record_id,tag_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',[input.organizationId,recordId,tagId]);}
  }
  const submission=await db.query<{id:string}>(`INSERT INTO whatsapp_flow_submissions(organization_id,flow_id,conversation_id,message_id,record_id,provider_submission_id,flow_token,normalized_payload,audit_payload,processing_result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,[input.organizationId,flow.id,input.conversationId,input.messageId,recordId,input.providerSubmissionId,flowToken,JSON.stringify(normalized),JSON.stringify(safeAudit(input.response)),result]);

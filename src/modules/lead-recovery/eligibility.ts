@@ -12,6 +12,7 @@ export type RecoveryStep={id:string;position:number;delay_days:number;template_i
 export type LeadFact={
  id:string;name:string;stage:string;status:string;owner_id:string;owner_name:string;created_at:string;updated_at:string;phone:string;
  consent_status:'unknown'|'opted_in'|'opted_out';consent_source:string;consent_version:number|null;
+ service_started_at:string|null;service_source:string;
  conversation_id:string|null;automations_paused:boolean|null;automation_blocked:boolean|null;
  last_inbound_at:string|null;last_manual_outbound_at:string|null;last_commercial_activity_at:string|null;
  future_task_at:string|null;has_won_opportunity:boolean;has_lost_opportunity:boolean;has_accepted_proposal:boolean;owner_active:boolean;
@@ -24,7 +25,7 @@ export type LeadAssessment=LeadFact&{
 };
 
 export const exclusionLabels:Record<string,string>={
- consent_required:'Consentimento do WhatsApp não registrado',opted_out:'Cliente descadastrado',record_inactive:'Lead inativo ou convertido',stage_excluded:'Etapa fora da configuração',
+ consent_required:'Consentimento de marketing não registrado',opted_out:'Cliente descadastrado',record_inactive:'Lead inativo ou convertido',stage_excluded:'Etapa fora da configuração',
  seller_excluded:'Vendedor fora da configuração',owner_inactive:'Responsável inativo',invalid_phone:'WhatsApp inválido',follow_up_scheduled:'Acompanhamento já agendado',
  negotiation_concluded:'Negociação concluída',proposal_accepted:'Proposta aceita',conversation_paused:'Automação pausada para a conversa',contact_blocked:'Contato bloqueado/opt-out',
  awaiting_seller:'Cliente aguarda resposta do vendedor',uncontacted_disabled:'Leads não contatados não incluídos',waiting_period:'Aguardando prazo configurado',
@@ -46,6 +47,7 @@ export async function loadLeadFacts(db:Db,organizationId:string,actor?:Actor,lim
  const scope=actor?commercialScope(actor,'r',true):'r.organization_id=$1';
  const result=await db.query<LeadFact>(`SELECT r.id,r.name,r.stage,r.status,r.owner_id,u.name owner_name,r.created_at,r.updated_at,COALESCE(NULLIF(r.whatsapp,''),r.phone) phone,
   COALESCE(p.whatsapp_consent_status,'unknown') consent_status,COALESCE(p.consent_source,'') consent_source,p.version consent_version,
+  p.whatsapp_service_started_at service_started_at,COALESCE(p.whatsapp_service_source,'') service_source,
   c.id conversation_id,c.automations_paused,c.automation_blocked,c.last_inbound_at,
   messages.last_manual_outbound_at,activities.last_commercial_activity_at,tasks.future_task_at,
   EXISTS(SELECT 1 FROM crm_opportunities o WHERE o.organization_id=r.organization_id AND o.lead_id=r.id AND o.status='won') has_won_opportunity,

@@ -9,7 +9,7 @@ export const priorities={low:'Baixa',normal:'Normal',high:'Alta',urgent:'Urgente
 export const temperatures={cold:'Frio',warm:'Morno',hot:'Quente'};
 export const statuses={active:'Ativo',archived:'Arquivado',converted:'Convertido'};
 export const digits=(value:string)=>value.replace(/\D/g,'');
-export function normalizePhone(value:string){const d=digits(value);return d.length===10||d.length===11?'55'+d:d;}
+export function normalizePhone(value:string){const trimmed=value.trim();let d=digits(trimmed);if(trimmed.startsWith('00'))d=d.slice(2);else if(!trimmed.startsWith('+')&&(d.length===10||d.length===11))d='55'+d;return d;}
 export function validDocument(value:string){
  if(!value)return true;if(!/^(?:\d{11}|[A-Z0-9]{12}\d{2})$/.test(value)||/^(\d)\1+$/.test(value))return false;
  const check=(base:string,weights:number[])=>{const remainder=[...base].reduce((sum,n,i)=>sum+(n.charCodeAt(0)-48)*weights[i],0)%11;return remainder<2?0:11-remainder;};

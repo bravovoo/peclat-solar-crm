@@ -1,13 +1,12 @@
 import {createHash,createHmac,timingSafeEqual} from 'node:crypto';
-import type {PoolClient} from 'pg';
 import {database,transaction} from '@/server/db';
 import {AccessError} from '@/modules/auth/policy';
 import {normalizeWhatsAppNumber} from './domain';
 import {emitAutomationEvent} from '@/modules/automations/events';
 import {handleLeadRecoveryInbound} from '@/modules/lead-recovery/engine';
 import {processFlowSubmission} from './flow-submissions';
+import {resolveWhatsAppRecord} from './contact-identity';
 
-type Db=Pick<PoolClient,'query'>;
 type Json=Record<string,unknown>;
 type Incoming={businessId:string;phoneNumberId:string;waId:string;profileName:string;id:string;timestamp:Date;type:string;body:string;preview:string;contextId:string;mediaId:string;mimeType:string;filename:string;caption:string;metadata:Json;flowResponse:Json|null;status:'processed'|'unsupported';direction:'inbound'|'outbound';source:'messages'|'smb_message_echoes'};
 type IncomingStatus={businessId:string;phoneNumberId:string;id:string;timestamp:Date;status:'sent'|'delivered'|'read'|'failed';failureCode:string;failureTitle:string;failureDetail:string};
@@ -48,7 +47,6 @@ function parseSignedPayload(raw:Uint8Array,signature:string|null,secret:string){
  let payload:unknown;try{payload=JSON.parse(Buffer.from(raw).toString('utf8'));}catch{throw new AccessError(400,'Payload de webhook inválido.');}
  return {payload,incoming:extract(payload)};
 }
-async function resolveRecord(db:Db,organizationId:string,waId:string){const result=await db.query<{id:string}>(`SELECT r.id FROM crm_records r WHERE r.organization_id=$1 AND r.deleted_at IS NULL AND (r.phone=$2 OR r.whatsapp=$2 OR EXISTS(SELECT 1 FROM crm_record_contacts rc JOIN crm_contacts c ON c.organization_id=rc.organization_id AND c.id=rc.contact_id WHERE rc.organization_id=r.organization_id AND rc.record_id=r.id AND (c.phone=$2 OR c.whatsapp=$2))) ORDER BY r.id LIMIT 3 FOR SHARE OF r`,[organizationId,waId]);return result.rows.length===1?{recordId:result.rows[0].id,status:'identified',source:'automatic'}:{recordId:null,status:result.rows.length>1?'ambiguous':'unidentified',source:'none'};}
 export async function receiveMetaWebhook(raw:Uint8Array,signature:string|null,secret=process.env.WHATSAPP_APP_SECRET){
  if(!secret)throw new AccessError(503,'Webhook ainda não configurado.');
  const {incoming}=parseSignedPayload(raw,signature,secret);if(!incoming.messages.length&&!incoming.statuses.length)return {accepted:true,processed:0,duplicates:0};
@@ -60,7 +58,7 @@ export async function receiveMetaWebhook(raw:Uint8Array,signature:string|null,se
    const integration=await db.query<{organization_id:string;updated_by:string}>(`SELECT organization_id,updated_by FROM whatsapp_integrations WHERE phone_number_id=$1 AND business_account_id=$2 FOR UPDATE`,[message.phoneNumberId,message.businessId]);if(!integration.rowCount)continue;
    const organizationId=integration.rows[0].organization_id,eventType=`${message.source}.${message.type}`;
    const event=await db.query(`INSERT INTO whatsapp_webhook_events(organization_id,provider_event_id,event_type,payload_sha256,status,processed_at) VALUES ($1,$2,$3,$4,'processed',now()) ON CONFLICT(organization_id,provider_event_id) DO NOTHING RETURNING provider_event_id`,[organizationId,message.id,eventType,hash]);if(!event.rowCount){duplicates++;continue;}
-   const match=await resolveRecord(db,organizationId,normalized.digits),lastInboundAt=message.direction==='inbound'?message.timestamp:null;
+   const match=await resolveWhatsAppRecord(db,{organizationId,waId:normalized.digits,phoneE164:normalized.e164!,profileName:message.profileName,actorId:integration.rows[0].updated_by,timestamp:message.timestamp,createIfMissing:message.direction==='inbound'}),lastInboundAt=message.direction==='inbound'?message.timestamp:null;
    const conversation=await db.query<{id:string;created:boolean;record_id:string|null;automation_owner_id:string|null}>(`INSERT INTO whatsapp_conversations(organization_id,external_wa_id,phone_e164,profile_name,record_id,link_status,link_source,last_inbound_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(organization_id,external_wa_id) DO UPDATE SET profile_name=CASE WHEN EXCLUDED.profile_name<>'' THEN EXCLUDED.profile_name ELSE whatsapp_conversations.profile_name END,record_id=CASE WHEN whatsapp_conversations.link_source='none' THEN EXCLUDED.record_id ELSE whatsapp_conversations.record_id END,link_status=CASE WHEN whatsapp_conversations.link_source='none' THEN EXCLUDED.link_status ELSE whatsapp_conversations.link_status END,link_source=CASE WHEN whatsapp_conversations.link_source='none' THEN EXCLUDED.link_source ELSE whatsapp_conversations.link_source END,last_inbound_at=GREATEST(COALESCE(whatsapp_conversations.last_inbound_at,EXCLUDED.last_inbound_at),EXCLUDED.last_inbound_at),updated_at=now() RETURNING id,(xmax=0) created,record_id,automation_owner_id`,[organizationId,normalized.digits,normalized.e164,message.profileName,match.recordId,match.status,match.source,lastInboundAt]);
    const conversationId=conversation.rows[0].id;
    const inserted=message.direction==='inbound'
@@ -72,6 +70,8 @@ export async function receiveMetaWebhook(raw:Uint8Array,signature:string|null,se
     await db.query(`UPDATE whatsapp_conversations SET unread_count=unread_count+1,last_message_preview=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $4 ELSE last_message_preview END,last_message_type=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $5 ELSE last_message_type END,last_message_at=GREATEST(COALESCE(last_message_at,$3),$3),last_inbound_at=GREATEST(COALESCE(last_inbound_at,$3),$3),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[organizationId,conversationId,message.timestamp,message.preview,message.type]);
      await handleLeadRecoveryInbound(db,{organizationId,conversationId,recordId,timestamp:message.timestamp,text:message.type==='text'?message.body:''});
      await emitAutomationEvent(db,{organizationId,type:'whatsapp.inbound_received',eventId:message.id,entityType:'conversation',entityId:conversationId,conversationId,recordId,payload:{message_id:inserted.rows[0].id,direction:'inbound',message_type:message.type}});
+     if(match.created&&recordId)await emitAutomationEvent(db,{organizationId,type:'lead.created',eventId:`whatsapp:${message.id}:lead`,entityType:'record',entityId:recordId,conversationId,recordId,payload:{owner_id:null,stage:'new',source:'WhatsApp'}});
+     if(match.created&&recordId)await emitAutomationEvent(db,{organizationId,type:'whatsapp.lead_created',eventId:`whatsapp-lead:${conversationId}:${recordId}`,entityType:'record',entityId:recordId,conversationId,recordId,payload:{owner_id:null,source:'WhatsApp'}});
      if(conversation.rows[0].created)await emitAutomationEvent(db,{organizationId,type:'whatsapp.conversation_created',eventId:`conversation:${conversationId}`,entityType:'conversation',entityId:conversationId,conversationId,recordId});
      if(!conversation.rows[0].automation_owner_id)await emitAutomationEvent(db,{organizationId,type:'whatsapp.conversation_unassigned',eventId:`unassigned:${conversationId}:${message.id}`,entityType:'conversation',entityId:conversationId,conversationId,recordId});
    }else await db.query(`UPDATE whatsapp_conversations SET last_message_preview=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $4 ELSE last_message_preview END,last_message_type=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $5 ELSE last_message_type END,last_message_at=GREATEST(COALESCE(last_message_at,$3),$3),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[organizationId,conversationId,message.timestamp,message.preview,message.type]);
