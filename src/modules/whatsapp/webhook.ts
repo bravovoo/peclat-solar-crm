@@ -5,6 +5,7 @@ import {normalizeWhatsAppNumber} from './domain';
 import {emitAutomationEvent} from '@/modules/automations/events';
 import {handleLeadRecoveryInbound} from '@/modules/lead-recovery/engine';
 import {processFlowSubmission} from './flow-submissions';
+import {captureContextualWhatsAppOptIn} from './marketing-consent';
 import {resolveWhatsAppRecord} from './contact-identity';
 
 type Json=Record<string,unknown>;
@@ -27,8 +28,8 @@ function parseMessage(entry:Json,value:Json,message:Json,direction:'inbound'|'ou
  else if(type==='interactive'){
   const interactive=object(message.interactive),interactionType=text(interactive.type,40);
   if(interactionType==='nfm_reply'){
-   const reply=object(interactive.nfm_reply),raw=text(reply.response_json,16000);let parsed:unknown;try{parsed=JSON.parse(raw);}catch{parsed=null;}const source=object(parsed),entries=Object.entries(source).slice(0,30),valid=raw.length>0&&entries.length>0&&entries.every(([key,value])=>/^[a-z][a-z0-9_]{0,79}$/.test(key)&&typeof value==='string');
-   if(valid){flowResponse=Object.fromEntries(entries.map(([key,value])=>[key,text(value,key==='observations'?2000:500)]));safe={interaction_type:'nfm_reply',flow_name:text(reply.name,100),body:text(reply.body,180)};preview='Formulário preenchido';}
+   const reply=object(interactive.nfm_reply),raw=text(reply.response_json,16000);let parsed:unknown;try{parsed=JSON.parse(raw);}catch{parsed=null;}const source=object(parsed),entries=Object.entries(source).slice(0,30),valid=raw.length>0&&entries.length>0&&entries.every(([key,value])=>/^[a-z][a-z0-9_]{0,79}$/.test(key)&&(typeof value==='string'||typeof value==='boolean'));
+   if(valid){flowResponse=Object.fromEntries(entries.map(([key,value])=>[key,typeof value==='boolean'?String(value):text(value,key==='observations'?2000:500)]));safe={interaction_type:'nfm_reply',flow_name:text(reply.name,100),body:text(reply.body,180)};preview='Formulário preenchido';}
    else{safe={interaction_type:'nfm_reply',invalid_response:true};preview='Resposta de formulário inválida';status='unsupported';}
   }else{const reply=object(interactive.button_reply??interactive.list_reply);safe={interaction_type:interactionType,reply_id:text(reply.id,180),title:text(reply.title,180)};preview=text(reply.title,180)||'Interação recebida';}
  }
@@ -66,9 +67,10 @@ export async function receiveMetaWebhook(raw:Uint8Array,signature:string|null,se
     :await db.query(`INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,context_message_id,media_id,mime_type,filename,caption,safe_metadata,meta_timestamp,processing_status,sent_by,client_request_id,delivery_status,sent_at,origin) VALUES ($1,$2,$3,'outbound',$4,$5,'',$6,$7,$8,$9,$10,$11,$12,$13,$14,gen_random_uuid(),'sent',$12,'manual') ON CONFLICT(organization_id,meta_message_id) DO NOTHING RETURNING id`,[organizationId,conversationId,message.id,message.type,message.body,message.contextId,message.mediaId,message.mimeType,message.filename,message.caption,message.metadata,message.timestamp,message.status,integration.rows[0].updated_by]);
    if(!inserted.rowCount){duplicates++;continue;}
     if(message.direction==='inbound'){
-     const submission=message.type==='interactive'&&message.flowResponse?await processFlowSubmission(db,{organizationId,conversationId,messageId:inserted.rows[0].id,providerSubmissionId:message.id,contextMessageId:message.contextId,waId:normalized.digits,actorId:integration.rows[0].updated_by,response:message.flowResponse}):null,recordId=submission?.recordId??conversation.rows[0].record_id;
+     const submission=message.type==='interactive'&&message.flowResponse?await processFlowSubmission(db,{organizationId,conversationId,messageId:inserted.rows[0].id,providerSubmissionId:message.id,contextMessageId:message.contextId,waId:normalized.digits,actorId:integration.rows[0].updated_by,timestamp:message.timestamp,response:message.flowResponse}):null,recordId=submission?.recordId??conversation.rows[0].record_id;
+    if(recordId&&!message.flowResponse){const reply=message.type==='interactive'?text(message.metadata.title,180):message.type==='text'?message.body:'';await captureContextualWhatsAppOptIn(db,{organizationId,recordId,conversationId,messageId:message.id,actorId:integration.rows[0].updated_by,timestamp:message.timestamp,contextMessageId:message.contextId,reply});}
     await db.query(`UPDATE whatsapp_conversations SET unread_count=unread_count+1,last_message_preview=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $4 ELSE last_message_preview END,last_message_type=CASE WHEN last_message_at IS NULL OR last_message_at<=$3 THEN $5 ELSE last_message_type END,last_message_at=GREATEST(COALESCE(last_message_at,$3),$3),last_inbound_at=GREATEST(COALESCE(last_inbound_at,$3),$3),version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,[organizationId,conversationId,message.timestamp,message.preview,message.type]);
-     await handleLeadRecoveryInbound(db,{organizationId,conversationId,recordId,timestamp:message.timestamp,text:message.type==='text'?message.body:''});
+     await handleLeadRecoveryInbound(db,{organizationId,conversationId,recordId,actorId:integration.rows[0].updated_by,timestamp:message.timestamp,text:message.type==='text'?message.body:''});
      await emitAutomationEvent(db,{organizationId,type:'whatsapp.inbound_received',eventId:message.id,entityType:'conversation',entityId:conversationId,conversationId,recordId,payload:{message_id:inserted.rows[0].id,direction:'inbound',message_type:message.type}});
      if(match.created&&recordId)await emitAutomationEvent(db,{organizationId,type:'lead.created',eventId:`whatsapp:${message.id}:lead`,entityType:'record',entityId:recordId,conversationId,recordId,payload:{owner_id:null,stage:'new',source:'WhatsApp'}});
      if(match.created&&recordId)await emitAutomationEvent(db,{organizationId,type:'whatsapp.lead_created',eventId:`whatsapp-lead:${conversationId}:${recordId}`,entityType:'record',entityId:recordId,conversationId,recordId,payload:{owner_id:null,source:'WhatsApp'}});

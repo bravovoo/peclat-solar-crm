@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {leadFirstName} from '../src/modules/lead-recovery/engine';
 import {assessLead,type LeadFact,type RecoveryConfig,type RecoveryStep} from '../src/modules/lead-recovery/eligibility';
 import {recoverySettingsInput} from '../src/modules/lead-recovery/domain';
+import {hasExplicitFlowMarketingOptIn,isAffirmativeWhatsAppConsent,isExplicitWhatsAppMarketingPrompt} from '../src/modules/whatsapp/marketing-consent';
 
 const now=new Date('2026-09-24T15:00:00Z');
 const config:RecoveryConfig={organization_id:crypto.randomUUID(),enabled:true,include_uncontacted:true,timezone:'America/Sao_Paulo',business_hours:Object.fromEntries(['1','2','3','4','5','6','7'].map(d=>[d,{enabled:true,start:'10:00',end:'14:00'}])),lead_stages:['contact'],seller_ids:[],version:1,updated_by:crypto.randomUUID()};
@@ -52,4 +53,22 @@ test('quatro passos crescentes; quinto passo e inclusão de nunca contatados sã
  assert.equal(recoverySettingsInput.safeParse({...input,include_uncontacted:true}).success,false);
  assert.equal(recoverySettingsInput.safeParse({...input,steps:[...input.steps,{...input.steps[3],position:5}]}).success,false);
  assert.equal(recoverySettingsInput.safeParse({...input,steps:input.steps.map(s=>({...s,delay_days:2}))}).success,false);
+});
+
+test('consentimento só é reconhecido após aceite explícito vinculado a pedido da Peclat Solar',()=>{
+ const prompt='Você autoriza a Peclat Solar a enviar futuras mensagens de acompanhamento pelo WhatsApp?';
+ assert.equal(isExplicitWhatsAppMarketingPrompt(prompt),true);
+ assert.equal(isExplicitWhatsAppMarketingPrompt('A Peclat Solar pode enviar a proposta pelo WhatsApp?'),false);
+ assert.equal(isExplicitWhatsAppMarketingPrompt('Você autoriza receber futuras mensagens da empresa pelo WhatsApp?'),false);
+ assert.equal(isAffirmativeWhatsAppConsent('Sim, autorizo!'),true);
+ assert.equal(isAffirmativeWhatsAppConsent('Sim, mas só amanhã'),false);
+});
+
+test('só OptIn verdadeiro em Flow com texto explícito pode autorizar mensagens de marketing',()=>{
+ const flow={screens:[{layout:{children:[{type:'Form',children:[{type:'OptIn',name:'whatsapp_marketing_opt_in',label:'Aceito receber futuras novidades da Peclat Solar pelo WhatsApp.'}]}]}}]};
+ assert.equal(hasExplicitFlowMarketingOptIn(flow,{whatsapp_marketing_opt_in:true}),true);
+ assert.equal(hasExplicitFlowMarketingOptIn(flow,{whatsapp_marketing_opt_in:'true'}),true);
+ assert.equal(hasExplicitFlowMarketingOptIn(flow,{whatsapp_marketing_opt_in:'false'}),false);
+ assert.equal(hasExplicitFlowMarketingOptIn({screens:[{layout:{children:[{type:'OptIn',name:'consent',label:'Aceito receber futuras mensagens pelo WhatsApp.'}]}}]},{consent:true}),false);
+ assert.equal(hasExplicitFlowMarketingOptIn({screens:[{layout:{children:[{type:'RadioButtonsGroup',name:'consent',label:'Aceito receber futuras mensagens da Peclat Solar pelo WhatsApp'}]}}]},{consent:'true'}),false);
 });

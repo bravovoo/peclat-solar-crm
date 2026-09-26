@@ -26,12 +26,9 @@ export const recoverySettingsInput=z.object({
 }).strict();
 
 export const recoveryConsentInput=z.object({
- whatsapp_consent_status:z.enum(['unknown','opted_in','opted_out']),
- consent_source:z.string().trim().max(180),
+ whatsapp_consent_status:z.literal('opted_out'),
  version:z.number().int().positive().nullable(),
-}).strict().superRefine((value,ctx)=>{
- if(value.whatsapp_consent_status==='opted_in'&&!value.consent_source)ctx.addIssue({code:'custom',message:'Informe a origem do consentimento.',path:['consent_source']});
-});
+}).strict();
 
 export const recoveryFilters=z.object({
  q:z.string().trim().max(120).default(''),

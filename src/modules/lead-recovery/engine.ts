@@ -5,6 +5,7 @@ import {sendWhatsAppRecoveryTemplate} from '@/modules/whatsapp/outbound';
 import type {MetaFetcher} from '@/modules/whatsapp/meta';
 import {assessLead,loadLeadFacts,loadRecoveryConfig,type LeadFact,type RecoveryStep} from './eligibility';
 import {nextRecoveryWindow,recoveryDueAt,recoveryEligibleAt,recoveryIsOpen,recoveryTimezone} from './schedule';
+import {reconcileHistoricalWhatsAppOptIns} from '@/modules/whatsapp/marketing-consent';
 
 type Db=Pick<PoolClient,'query'>;
 type Attempt={id:string;organization_id:string;enrollment_id:string;step_position:number;template_id:string;client_request_id:string;attempts:number};
@@ -28,7 +29,7 @@ async function insertAttempt(db:Db,org:string,e:Enrollment,step:RecoveryStep,hou
 }
 export async function refreshLeadRecoveryEnrollments(now=new Date()){
  const organizations=await database().query<{organization_id:string}>("SELECT organization_id FROM organization_lead_recovery_settings WHERE enabled");let created=0,cancelled=0;
- for(const {organization_id:org} of organizations.rows){let afterId:string|undefined;
+ for(const {organization_id:org} of organizations.rows){await transaction(async db=>{await lockRecoveryOrganization(db,org);await reconcileHistoricalWhatsAppOptIns(db,org);});let afterId:string|undefined;
   for(;;){const batch=await loadLeadFacts(database(),org,undefined,100,undefined,afterId,now);if(!batch.length)break;
    for(const candidate of batch)await transaction(async db=>{
     await lockRecoveryOrganization(db,org);
@@ -119,9 +120,15 @@ export function leadFirstName(value:string){const first=value.trim().split(/\s+/
 function render(value:string,fact:LeadFact,actor:Actor){return value.replaceAll('{{lead_first_name}}',leadFirstName(fact.name)).replaceAll('{{lead_name}}',fact.name).replaceAll('{{seller_name}}',fact.owner_name||actor.name).replaceAll('{{organization_name}}',actor.organizationName);}
 
 
-export async function handleLeadRecoveryInbound(db:Db,input:{organizationId:string;conversationId:string;recordId:string|null;timestamp:Date;text:string}){
- const enrollment=await db.query<{id:string;record_id:string;owner_id:string;status:string}>(`SELECT e.id,e.record_id,e.owner_id,e.status FROM lead_recovery_enrollments e WHERE e.organization_id=$1 AND (e.conversation_id=$2 OR ($3::uuid IS NOT NULL AND e.record_id=$3)) AND e.status IN ('scheduled','paused') AND e.inactivity_anchor<=$4 ORDER BY e.created_at DESC LIMIT 1 FOR UPDATE`,[input.organizationId,input.conversationId,input.recordId,input.timestamp]);if(!enrollment.rows[0])return {interrupted:false};const row=enrollment.rows[0],optOut=['sair','parar','cancelar','não quero receber','nao quero receber'].includes(input.text.trim().toLocaleLowerCase('pt-BR')),status=optOut?'cancelled':'responded',reason=optOut?'contact_opt_out':'client_replied';
+export async function handleLeadRecoveryInbound(db:Db,input:{organizationId:string;conversationId:string;recordId:string|null;actorId:string;timestamp:Date;text:string}){
+ const normalized=input.text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9 ]/g,' ').trim().replace(/\s+/g,' '),optOut=['sair','parar','pare','cancelar','descadastrar','remover','nao quero receber','nao quero mais','nao receber mais'].includes(normalized),enrollment=await db.query<{id:string;record_id:string;owner_id:string;status:string}>(`SELECT e.id,e.record_id,e.owner_id,e.status FROM lead_recovery_enrollments e WHERE e.organization_id=$1 AND (e.conversation_id=$2 OR ($3::uuid IS NOT NULL AND e.record_id=$3)) AND e.status IN ('scheduled','paused') AND e.inactivity_anchor<=$4 ORDER BY e.created_at DESC LIMIT 1 FOR UPDATE`,[input.organizationId,input.conversationId,input.recordId,input.timestamp]);
+ if(!enrollment.rows[0]){if(!optOut)return {interrupted:false};await persistWhatsAppOptOut(db,input,input.recordId,input.actorId);return {interrupted:false,optOut:true};}
+ const row=enrollment.rows[0],status=optOut?'cancelled':'responded',reason=optOut?'contact_opt_out':'client_replied';
  await db.query('UPDATE lead_recovery_enrollments SET status=$3,response_at=$4,next_attempt_at=NULL,state_reason=$5,version=version+1,updated_by=$6,updated_at=now() WHERE organization_id=$1 AND id=$2',[input.organizationId,row.id,status,input.timestamp,reason,row.owner_id]);await db.query("UPDATE lead_recovery_attempts SET status='cancelled',safe_error=$3,completed_at=now(),updated_at=now() WHERE organization_id=$1 AND enrollment_id=$2 AND status IN ('pending','processing')",[input.organizationId,row.id,reason]);
- if(optOut){await db.query(`INSERT INTO crm_contact_preferences(organization_id,record_id,whatsapp_consent_status,consent_source,opted_out_at,updated_by) VALUES ($1,$2,'opted_out','Solicitação recebida pelo WhatsApp',now(),$3) ON CONFLICT(organization_id,record_id) DO UPDATE SET whatsapp_consent_status='opted_out',consent_source=EXCLUDED.consent_source,consented_at=NULL,opted_out_at=now(),updated_by=EXCLUDED.updated_by,version=crm_contact_preferences.version+1,updated_at=now()`,[input.organizationId,row.record_id,row.owner_id]);await db.query('UPDATE whatsapp_conversations SET automation_blocked=true,version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2',[input.organizationId,input.conversationId]);}
+ if(optOut)await persistWhatsAppOptOut(db,input,row.record_id,row.owner_id);
  await db.query(`INSERT INTO user_notifications(organization_id,user_id,notification_type,title,detail,entity_type,entity_id) VALUES ($1,$2,$3,$4,$5,'lead',$6)`,[input.organizationId,row.owner_id,optOut?'lead_recovery.opt_out':'lead_recovery.response',optOut?'Cliente solicitou descadastramento':'Lead respondeu à recuperação',optOut?'O contato foi bloqueado e as próximas tentativas foram canceladas.':'As próximas tentativas foram canceladas. Abra o atendimento para continuar.',row.record_id]);await db.query("INSERT INTO crm_activities(organization_id,record_id,actor_id,action,detail) VALUES ($1,$2,$3,$4,$5)",[input.organizationId,row.record_id,row.owner_id,optOut?'lead_recovery.opted_out':'lead_recovery.responded',optOut?'Descadastramento solicitado pelo WhatsApp.':'Cliente respondeu; sequência automática interrompida.']);return {interrupted:true,optOut};
+}
+async function persistWhatsAppOptOut(db:Db,input:{organizationId:string;conversationId:string},recordId:string|null,actorId:string){
+ if(recordId)await db.query(`INSERT INTO crm_contact_preferences(organization_id,record_id,whatsapp_consent_status,consent_source,opted_out_at,updated_by) VALUES ($1,$2,'opted_out','Solicitação recebida pelo WhatsApp',now(),$3) ON CONFLICT(organization_id,record_id) DO UPDATE SET whatsapp_consent_status='opted_out',opted_out_at=now(),updated_by=EXCLUDED.updated_by,version=crm_contact_preferences.version+1,updated_at=now()`,[input.organizationId,recordId,actorId]);
+ await db.query('UPDATE whatsapp_conversations SET automation_blocked=true,version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2',[input.organizationId,input.conversationId]);
 }

@@ -2,10 +2,11 @@ import type {PoolClient} from 'pg';
 import {emitAutomationEvent} from '@/modules/automations/events';
 import {emptyNormalizedFlow,type NormalizedFlowSubmission} from './flow-domain';
 import {setWhatsAppIdentity} from './contact-identity';
+import {captureFlowWhatsAppOptIn} from './marketing-consent';
 
 type Db=Pick<PoolClient,'query'>;
-type Input={organizationId:string;conversationId:string;messageId:string;providerSubmissionId:string;contextMessageId:string;waId:string;actorId:string;response:Record<string,unknown>};
-type Flow={id:string;display_name:string;technical_name:string};
+type Input={organizationId:string;conversationId:string;messageId:string;providerSubmissionId:string;contextMessageId:string;waId:string;actorId:string;timestamp:Date;response:Record<string,unknown>};
+type Flow={id:string;display_name:string;technical_name:string;flow_json:Record<string,unknown>};
 type RecordMatch={id:string;kind:'lead'|'customer'|'company'};
 type ProcessingResult='lead_created'|'lead_updated'|'customer_linked'|'company_linked'|'ambiguous_contact'|'invalid_data';
 const text=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):'';
@@ -20,7 +21,7 @@ function safeAudit(response:Record<string,unknown>){const allowed=['full_name','
 function summary(value:NormalizedFlowSubmission){return {name:value.name,city:value.city,state:value.state,property_type:value.property_type,average_bill:value.average_bill,has_bill:value.has_bill,property_owned:value.property_owned,commercial_interest:value.commercial_interest,technical_visit:value.technical_visit,preferred_contact_period:value.preferred_contact_period};}
 function complete(value:NormalizedFlowSubmission){return Boolean(value.name&&value.city&&value.state&&value.property_type&&value.average_bill!==null&&value.has_bill&&value.property_owned&&value.commercial_interest&&value.technical_visit&&value.preferred_contact_period);}
 async function ensureTag(db:Db,organizationId:string,name:string,color:string){await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${organizationId}:crm-tag:${name.toLowerCase()}`]);const found=await db.query<{id:string}>('SELECT id FROM crm_tags WHERE organization_id=$1 AND lower(name)=lower($2) LIMIT 1',[organizationId,name]);if(found.rowCount)return found.rows[0].id;const count=await db.query<{total:number}>('SELECT count(*)::int total FROM crm_tags WHERE organization_id=$1',[organizationId]);if(Number(count.rows[0].total)>=500)return null;return (await db.query<{id:string}>('INSERT INTO crm_tags(organization_id,name,color) VALUES ($1,$2,$3) RETURNING id',[organizationId,name,color])).rows[0].id;}
-async function flowForReply(db:Db,input:Input,flowToken:string){const result=await db.query<Flow>(`SELECT f.id,f.display_name,f.technical_name FROM whatsapp_flows f WHERE f.organization_id=$1 AND EXISTS(SELECT 1 FROM whatsapp_messages m WHERE m.organization_id=f.organization_id AND m.conversation_id=$4 AND m.direction='outbound' AND m.message_type='interactive' AND m.safe_metadata->>'flow_id'=f.id::text AND (($2<>'' AND m.safe_metadata->>'flow_token'=$2 AND ($3='' OR m.meta_message_id=$3)) OR ($2='' AND $3<>'' AND m.meta_message_id=$3))) ORDER BY f.updated_at DESC LIMIT 1`,[input.organizationId,flowToken,input.contextMessageId,input.conversationId]);return result.rows[0]??null;}
+async function flowForReply(db:Db,input:Input,flowToken:string){const result=await db.query<Flow>(`SELECT f.id,f.display_name,f.technical_name,f.flow_json FROM whatsapp_flows f WHERE f.organization_id=$1 AND EXISTS(SELECT 1 FROM whatsapp_messages m WHERE m.organization_id=f.organization_id AND m.conversation_id=$4 AND m.direction='outbound' AND m.message_type='interactive' AND m.safe_metadata->>'flow_id'=f.id::text AND (($2<>'' AND m.safe_metadata->>'flow_token'=$2 AND ($3='' OR m.meta_message_id=$3)) OR ($2='' AND $3<>'' AND m.meta_message_id=$3))) ORDER BY f.updated_at DESC LIMIT 1`,[input.organizationId,flowToken,input.contextMessageId,input.conversationId]);return result.rows[0]??null;}
 function billAmount(value:string){
  const raw=value.trim().replace(/^R\$\s*/,'');
  if(!/^(?:\d+(?:[.,]\d{1,2})?|\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?)$/.test(raw))return null;
@@ -61,6 +62,7 @@ export async function processFlowSubmission(db:Db,input:Input){
 
  if(recordId){
   await setWhatsAppIdentity(db,{organizationId:input.organizationId,waId:input.waId,phoneE164:`+${input.waId}`,recordId,profileName:normalized.name,source:'flow'});
+  await captureFlowWhatsAppOptIn(db,{organizationId:input.organizationId,recordId,conversationId:input.conversationId,messageId:input.providerSubmissionId,actorId:input.actorId,timestamp:input.timestamp,flowJson:flow.flow_json,flowName:flow.technical_name,response:input.response});
   for(const [name,color,enabled] of [['WhatsApp Flow','#20a77a',true],['Orçamento Solar','#d8a422',true],['Financiamento','#376bc7',normalized.commercial_interest==='Financiar o sistema'],['Visita Técnica','#8b5cf6',normalized.technical_visit==='Sim']] as const){if(!enabled)continue;const tagId=await ensureTag(db,input.organizationId,name,color);if(tagId)await db.query('INSERT INTO crm_record_tags(organization_id,record_id,tag_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',[input.organizationId,recordId,tagId]);}
  }
  const submission=await db.query<{id:string}>(`INSERT INTO whatsapp_flow_submissions(organization_id,flow_id,conversation_id,message_id,record_id,provider_submission_id,flow_token,normalized_payload,audit_payload,processing_result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,[input.organizationId,flow.id,input.conversationId,input.messageId,recordId,input.providerSubmissionId,flowToken,JSON.stringify(normalized),JSON.stringify(safeAudit(input.response)),result]);

@@ -39,15 +39,20 @@ async function fixture(consent=true):Promise<Fixture>{
  const templates:string[]=[];for(let i=1;i<=3;i++)templates.push((await database().query("INSERT INTO whatsapp_templates(organization_id,meta_template_id,name,language,category,status,components,supported) VALUES ($1,$2,$3,'pt_BR','MARKETING','APPROVED',$4,true) RETURNING id",[org,`test-${i}`,`peclat_recuperacao_lead_${i}`,JSON.stringify([{type:'BODY',text:'Olá {{1}}'}])])).rows[0].id);
  // Real inbound pipeline creates an unassigned lead, then company replies.
  const partial={org,actor,wa,phoneId,businessId,templates};await inbound(partial,at(-1));
- const c=(await database().query('SELECT id,record_id FROM whatsapp_conversations WHERE organization_id=$1',[org])).rows[0];
- const f={...partial,lead:c.record_id,conversation:c.id};await outbound(f,base);
- if(consent){const pref=(await database().query('SELECT version FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[org,f.lead])).rows[0];await saveRecoveryConsent(actor,f.lead,{whatsapp_consent_status:'opted_in',consent_source:'Fixture explícita',version:pref.version});}
+  const c=(await database().query('SELECT id,record_id FROM whatsapp_conversations WHERE organization_id=$1',[org])).rows[0];
+  const f={...partial,lead:c.record_id,conversation:c.id};if(consent)await explicitConsent(f,at(-1));await outbound(f,base);
  await saveRecoverySettings(actor,{enabled:true,include_uncontacted:false,timezone:'America/Sao_Paulo',business_hours:hours,lead_stages:['new'],seller_ids:[],steps:[2,5,7,10].map((day,i)=>({position:i+1,delay_days:day,template_id:templates[Math.min(i,2)],header_parameters:[],body_parameters:['{{lead_first_name}}']})),version:1});return f;
 }
-async function inbound(f:Pick<Fixture,'wa'|'phoneId'|'businessId'>,date:Date){
- const raw=Buffer.from(JSON.stringify({object:'whatsapp_business_account',entry:[{id:f.businessId,changes:[{field:'messages',value:{metadata:{phone_number_id:f.phoneId},messages:[{from:f.wa,id:`wamid.in.${crypto.randomUUID()}`,timestamp:String(date.getTime()/1000),type:'text',text:{body:'Resposta fictícia'}}]}}]}]}));
+async function inbound(f:Pick<Fixture,'wa'|'phoneId'|'businessId'>,date:Date,body='Resposta fictícia',contextId=''){
+ const message={from:f.wa,id:`wamid.in.${crypto.randomUUID()}`,timestamp:String(date.getTime()/1000),type:'text',text:{body},...(contextId?{context:{id:contextId}}:{})};
+ const raw=Buffer.from(JSON.stringify({object:'whatsapp_business_account',entry:[{id:f.businessId,changes:[{field:'messages',value:{metadata:{phone_number_id:f.phoneId},messages:[message]}}]}]}));
  return receiveMetaWebhook(raw,'sha256='+createHmac('sha256','mock').update(raw).digest('hex'),'mock');
 }
+async function echo(f:Pick<Fixture,'wa'|'phoneId'|'businessId'>,date:Date,id:string,body:string){
+ const raw=Buffer.from(JSON.stringify({object:'whatsapp_business_account',entry:[{id:f.businessId,changes:[{field:'smb_message_echoes',value:{metadata:{phone_number_id:f.phoneId},message_echoes:[{to:f.wa,id,timestamp:String(date.getTime()/1000),type:'text',text:{body}}]}}]}]}));
+ return receiveMetaWebhook(raw,'sha256='+createHmac('sha256','mock').update(raw).digest('hex'),'mock');
+}
+async function explicitConsent(f:Fixture,baseDate:Date){const promptId=`wamid.consent.${crypto.randomUUID()}`;await echo(f,new Date(baseDate.getTime()+1000),promptId,'Você autoriza a Peclat Solar a enviar futuras mensagens de acompanhamento pelo WhatsApp?');await inbound(f,new Date(baseDate.getTime()+2000),'Sim, autorizo',promptId);return promptId;}
 async function outbound(f:Fixture,date:Date,status='sent'){
  return (await database().query("INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,meta_timestamp,processing_status,sent_by,client_request_id,delivery_status,origin) VALUES ($1,$2,$3,'outbound','text','Teste','',$4,'processed',$5,$6,$7,'manual') RETURNING id",[f.org,f.conversation,`wamid.out.${crypto.randomUUID()}`,date,admin.userId,crypto.randomUUID(),status])).rows[0].id;
 }
@@ -80,15 +85,38 @@ test('nova manual substitui ciclo ativo; failed/pending não mudam a base',async
  const anchor=(await cycle(f)).anchor_message_id;await outbound(f,at(4),'failed');await outbound(f,at(4),'pending');await refreshLeadRecoveryEnrollments(at(4));assert.equal((await cycle(f)).anchor_message_id,anchor);
  assert.equal((await processLeadRecoveryAttempts(20,fake,at(4))).sent,0);assert.equal((await pump(5)).sent,1);
 });
-test('sem consentimento ou contato inativo não entra; lead automático sem dono entra após consentimento',async()=>{
+test('opt-in é registrado automaticamente só com evidência explícita e vendedor não aprova manualmente',async()=>{
  const f=await fixture(false);assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,0);
- await saveRecoveryConsent(f.actor,f.lead,{whatsapp_consent_status:'opted_in',consent_source:'Teste',version:1});
+ await assert.rejects(()=>saveRecoveryConsent(f.actor,f.lead,{whatsapp_consent_status:'opted_in',consent_source:'Teste',version:1}));
+ await inbound(f,at(-1),'Sim');assert.equal((await database().query('SELECT whatsapp_consent_status FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0].whatsapp_consent_status,'unknown');
+ await explicitConsent(f,at(-1));assert.equal((await database().query('SELECT whatsapp_consent_status,consent_source FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0].whatsapp_consent_status,'opted_in');
  await database().query("UPDATE crm_records SET status='archived' WHERE id=$1",[f.lead]);assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,0);
  await database().query("UPDATE crm_records SET status='active' WHERE id=$1",[f.lead]);assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,1);
  const facts=await loadLeadFacts(database(),f.org);assert.equal(facts[0].owner_id,null);
  const before=(await database().query('SELECT count(*)::int n FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0].n;
  const sim=await simulateRecovery(f.actor,at(2));assert.equal(sim.summary.awaiting_customer,1);assert.equal(sim.summary.due_d2,1);assert.equal(sim.external_actions_executed,false);
  assert.equal((await database().query('SELECT count(*)::int n FROM lead_recovery_attempts WHERE organization_id=$1',[f.org])).rows[0].n,before);
+});
+test('evidência explícita já persistida é reconciliada uma vez antes do cron agendar',async()=>{
+ const f=await fixture(false),promptId=`wamid.historical.${crypto.randomUUID()}`;await echo(f,at(-1),promptId,'Você autoriza a Peclat Solar a enviar futuras mensagens de acompanhamento pelo WhatsApp?');
+ await database().query("INSERT INTO whatsapp_messages(organization_id,conversation_id,meta_message_id,direction,message_type,text_body,sender_wa_id,context_message_id,meta_timestamp,processing_status) VALUES ($1,$2,$3,'inbound','text','Sim, autorizo',$4,$5,$6,'processed')",[f.org,f.conversation,`wamid.reply.${crypto.randomUUID()}`,f.wa,promptId,at(-1)]);
+ assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,1);
+ const preference=(await database().query('SELECT whatsapp_consent_status,consent_source,consented_at FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0];assert.equal(preference.whatsapp_consent_status,'opted_in');assert.match(preference.consent_source,/histórico/);assert.equal(new Date(preference.consented_at).toISOString(),at(-1).toISOString());
+ assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,0);assert.equal((await database().query("SELECT count(*)::int n FROM audit_logs WHERE organization_id=$1 AND action='whatsapp.marketing_opt_in_history_scanned'",[f.org])).rows[0].n,1);
+});
+test('descadastramento inbound continua bloqueando e cancela as etapas futuras',async()=>{
+ const f=await fixture();await refreshLeadRecoveryEnrollments(base);assert.equal((await cycle(f)).status,'scheduled');
+ const before=(await database().query('SELECT consent_source,consented_at FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0];
+ await inbound(f,at(1),'PARAR');
+ const preference=(await database().query('SELECT whatsapp_consent_status,consent_source,consented_at,opted_out_at FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0];assert.equal(preference.whatsapp_consent_status,'opted_out');assert.equal(preference.consent_source,before.consent_source);assert.deepEqual(preference.consented_at,before.consented_at);assert.ok(preference.opted_out_at);
+ assert.equal((await database().query('SELECT automation_blocked FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[f.org,f.conversation])).rows[0].automation_blocked,true);
+ assert.equal((await cycle(f)).status,'cancelled');assert.equal((await pump(2)).sent,0);
+});
+test('descadastramento inbound bloqueia mesmo antes de existir uma sequência de recuperação',async()=>{
+ const f=await fixture(false);assert.equal((await refreshLeadRecoveryEnrollments(base)).created,0);await inbound(f,at(1),'PARAR');
+ const preference=(await database().query('SELECT whatsapp_consent_status,opted_out_at FROM crm_contact_preferences WHERE organization_id=$1 AND record_id=$2',[f.org,f.lead])).rows[0];assert.equal(preference.whatsapp_consent_status,'opted_out');assert.ok(preference.opted_out_at);
+ assert.equal((await database().query('SELECT automation_blocked FROM whatsapp_conversations WHERE organization_id=$1 AND id=$2',[f.org,f.conversation])).rows[0].automation_blocked,true);
+ assert.equal((await refreshLeadRecoveryEnrollments(at(2))).created,0);
 });
 test('janela SP 10–14 mantém vencida pendente sem gastar retries e respeita domingo',async()=>{
  const f=await fixture();await refreshLeadRecoveryEnrollments(base);
