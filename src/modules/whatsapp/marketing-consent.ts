@@ -4,14 +4,15 @@ type Db=Pick<PoolClient,'query'>;
 type ConsentContext={organizationId:string;recordId:string;conversationId:string;messageId:string;actorId:string;timestamp:Date};
 const normalize=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+]+/g,' ').trim().replace(/\s+/g,' ');
 const affirmative=new Set(['sim','sim autorizo','sim eu autorizo','aceito','eu aceito','autorizo','concordo','pode enviar','quero receber','quero sim']);
+export const automaticConsentPrompt='Podemos continuar enviando pelo WhatsApp atualizações e lembretes sobre seu atendimento e orçamento da Peclat Solar?';
 
 /** Requires the business name, WhatsApp, a permission request, and an ongoing message category. */
 export function isExplicitWhatsAppMarketingPrompt(value:string){
  const text=normalize(value);
- return text.length<=4000&&!/\b(nao|nunca|jamais|sem)\b/.test(text)&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
+ return text===normalize(automaticConsentPrompt)||(text.length<=4000&&!/\b(nao|nunca|jamais|sem)\b/.test(text)&&text.includes('peclat solar')&&/\bwhats ?app\b/.test(text)&&
   /\b(autoriza|autorizacao|consente|consentimento|concorda|aceita|permite|podemos)\b/.test(text)&&
   /\b(receber|receba|enviar|enviaremos)\b/.test(text)&&/\b(mensagem|mensagens)\b/.test(text)&&
-  /\b(futura|futuras|mais|acompanhamento|novidade|novidades|oferta|ofertas|proposta|propostas|orcamento|orcamentos)\b/.test(text);
+  /\b(futura|futuras|mais|acompanhamento|novidade|novidades|oferta|ofertas|proposta|propostas|orcamento|orcamentos)\b/.test(text));
 }
 
 export function isAffirmativeWhatsAppConsent(value:string){return affirmative.has(normalize(value));}
@@ -43,13 +44,24 @@ async function recordOptIn(db:Db,input:ConsentContext,source:string){
     AND (crm_contact_preferences.whatsapp_consent_status<>'opted_in' OR crm_contact_preferences.consented_at<=EXCLUDED.consented_at)
   RETURNING record_id`,[input.organizationId,input.recordId,source,input.timestamp,input.actorId]);
  if(!result.rowCount)return false;
- await db.query(`INSERT INTO audit_logs(organization_id,actor_id,action,detail) VALUES ($1,$2,'whatsapp.marketing_opt_in_verified',$3)`,[input.organizationId,input.actorId,`Consentimento WhatsApp verificado para lead ${input.recordId}; evidência ${source}; mensagem ${input.messageId}.`]);
+ const contact=await db.query<{contact_id:string}>(`SELECT contact_id FROM crm_record_contacts WHERE organization_id=$1 AND record_id=$2 ORDER BY is_primary DESC,contact_id LIMIT 1`,[input.organizationId,input.recordId]);
+ await db.query(`INSERT INTO audit_logs(organization_id,actor_id,action,detail) VALUES ($1,$2,'whatsapp.marketing_opt_in_verified',$3)`,[input.organizationId,input.actorId,`Consentimento WhatsApp verificado; lead_id=${input.recordId}; contact_id=${contact.rows[0]?.contact_id??'sem_contato_cadastrado'}; conversation_id=${input.conversationId}; meta_message_id=${input.messageId}; data=${input.timestamp.toISOString()}; evidência=${source}.`]);
  return true;
 }
 
 /** A contextual positive answer only counts when it directly quotes a strict, explicit outbound consent request. */
 export async function captureContextualWhatsAppOptIn(db:Db,input:ConsentContext&{contextMessageId:string;reply:string}){
- if(!input.contextMessageId||!isAffirmativeWhatsAppConsent(input.reply))return false;
+ if(!isAffirmativeWhatsAppConsent(input.reply))return false;
+ if(!input.contextMessageId){
+  // A free-text answer has no Meta context. Accept only the unambiguous phrase,
+  // and only when the most recent company message was this automatic question.
+  if(normalize(input.reply)!=='sim autorizo')return false;
+  const latest=await db.query<{text_body:string;meta_message_id:string;safe_metadata:Record<string,string>;meta_timestamp:Date;delivery_status:string}>(`SELECT text_body,meta_message_id,safe_metadata,meta_timestamp,delivery_status FROM whatsapp_messages
+   WHERE organization_id=$1 AND conversation_id=$2 AND direction='outbound' AND meta_timestamp<=$3
+   ORDER BY meta_timestamp DESC,id DESC LIMIT 1`,[input.organizationId,input.conversationId,input.timestamp]);
+  if(latest.rows[0]?.safe_metadata?.system_purpose!=='consent_request'||!latest.rows[0].meta_message_id||!['sent','delivered','read'].includes(latest.rows[0].delivery_status)||input.timestamp.getTime()-new Date(latest.rows[0].meta_timestamp).getTime()>86400000||!isExplicitWhatsAppMarketingPrompt(latest.rows[0].text_body))return false;
+  return recordOptIn(db,input,'Resposta textual inequívoca ao último pedido automático de WhatsApp da Peclat Solar');
+ }
  const prompt=await db.query<{text_body:string;direction:string}>(`SELECT text_body,direction FROM whatsapp_messages WHERE organization_id=$1 AND conversation_id=$2 AND meta_message_id=$3 AND direction='outbound' LIMIT 1`,[input.organizationId,input.conversationId,input.contextMessageId]);
  if(!prompt.rows[0]||!isExplicitWhatsAppMarketingPrompt(prompt.rows[0].text_body))return false;
  return recordOptIn(db,input,'Resposta afirmativa contextual a pedido explícito de WhatsApp da Peclat Solar');

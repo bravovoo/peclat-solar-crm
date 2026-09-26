@@ -20,6 +20,7 @@ const automationWorker={
     {runOperationalMonitoring},
     {processOperationalAlertDeliveries},
     {runLeadRecoveryScheduler},
+    {processAutomaticConsentRequests},
    ]=await Promise.all([
     import('./src/server/db'),
     import('./src/modules/automations/engine'),
@@ -28,9 +29,10 @@ const automationWorker={
     import('./src/modules/operations/monitoring'),
     import('./src/modules/operations/notifications'),
     import('./src/modules/lead-recovery/engine'),
+    import('./src/modules/whatsapp/consent-request'),
    ]);
    await withDatabaseConnectionString(connectionString,async()=>{
-    const steps=[['webhook',()=>processMetaWebhookBatches(50)],['storage',()=>processStorageDeletionJobs(50)],['cleanup',cleanupExpiredOperationalData],['automations',runAutomationScheduler],['lead_recovery',runLeadRecoveryScheduler],['monitoring',runOperationalMonitoring],['operational_notifications',()=>processOperationalAlertDeliveries(25)]] as const;
+    const steps=[['webhook',()=>processMetaWebhookBatches(50)],['consent_requests',()=>processAutomaticConsentRequests(5)],['storage',()=>processStorageDeletionJobs(50)],['cleanup',cleanupExpiredOperationalData],['automations',runAutomationScheduler],['lead_recovery',runLeadRecoveryScheduler],['monitoring',runOperationalMonitoring],['operational_notifications',()=>processOperationalAlertDeliveries(25)]] as const;
     let failed=false;
     for(const [step,run] of steps)try{await run();}catch(error){failed=true;console.error('operational_step_failed',{step,type:error instanceof Error?error.name:'unknown'});}
     if(failed)throw new Error('One or more operational steps failed.');
